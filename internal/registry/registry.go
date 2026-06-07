@@ -100,6 +100,19 @@ func Render(cfg *config.Config, p paths.Paths, name string, runValidate bool) (s
 		return "", fmt.Errorf("render template %s for node %q: %w", tmplPath, name, err)
 	}
 
+	// Bootstrap injection: when a bootstrap: block is configured, synthesize the
+	// three inline manifests (root Secret, config ConfigMap, controller bundle)
+	// and splice them into cluster.inlineManifests of the controlplane
+	// machineconfig. Runs BETWEEN the text/template pass and secret resolution so
+	// the root Secret's op:// refs are resolved by the same existing pass. Talos
+	// applies inline manifests only at cluster-init, so workers are skipped.
+	if cfg.Bootstrap != nil && node.Role == "controlplane" {
+		templated, err = injectBootstrapManifests(templated, cfg)
+		if err != nil {
+			return "", fmt.Errorf("inject bootstrap manifests for node %q: %w", name, err)
+		}
+	}
+
 	backends, err := secrets.BuildBackends(cfg)
 	if err != nil {
 		return "", err

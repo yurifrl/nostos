@@ -150,9 +150,12 @@ func (n Node) MACHyphen() string {
 
 // Config is the root document parsed from config.yaml.
 type Config struct {
-	Cluster Cluster         `yaml:"cluster" validate:"required"`
-	Secrets Secrets         `yaml:"secrets" validate:"required"`
-	Nodes   map[string]Node `yaml:"nodes,omitempty" validate:"dive"`
+	Cluster   Cluster         `yaml:"cluster" validate:"required"`
+	Secrets   Secrets         `yaml:"secrets" validate:"required"`
+	// Bootstrap is the optional cluster-bootstrap tier. nil => legacy behavior
+	// (templates own their inline manifests; render synthesizes nothing).
+	Bootstrap *Bootstrap      `yaml:"bootstrap,omitempty"`
+	Nodes     map[string]Node `yaml:"nodes,omitempty" validate:"dive"`
 }
 
 var nodeNameRE = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
