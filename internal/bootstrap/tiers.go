@@ -16,7 +16,17 @@ const (
 	waitNodesReadyTimeout = 5 * time.Minute
 	waitStoreValidTimeout = 3 * time.Minute
 	waitArgoCDTimeout     = 5 * time.Minute
+	waitAppsTimeout       = 2 * time.Minute
 	waitPollInterval      = 5 * time.Second
+)
+
+// Tier identifiers. Used as map keys for the durable handoff phases and as the
+// "tier" log attribute.
+const (
+	tierCilium = "cilium"
+	tierESO    = "eso"
+	tierArgoCD = "argocd"
+	tierApps   = "apps"
 )
 
 // gvrClusterSecretStore / gvrApplication are the dynamic GVRs the controller
@@ -72,23 +82,23 @@ func (c *Controller) applyCilium(ctx context.Context, cfg *Config) error {
 	return nil
 }
 
-// waitNodesReady blocks until every node reports Ready (CNI up). design §5.1.
-func (c *Controller) waitNodesReady(ctx context.Context) error {
-	return poll(ctx, waitNodesReadyTimeout, func(ctx context.Context) (bool, error) {
-		nodes, err := c.kube.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
-		if err != nil {
-			return false, err
-		}
-		if len(nodes.Items) == 0 {
+// nodesReady is the non-blocking unblock predicate for the Cilium tier
+// (design §6): true when every node reports Ready (CNI serving -> scheduling
+// unblocked).
+func (c *Controller) nodesReady(ctx context.Context) (bool, error) {
+	nodes, err := c.kube.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return false, err
+	}
+	if len(nodes.Items) == 0 {
+		return false, nil
+	}
+	for i := range nodes.Items {
+		if !nodeReady(&nodes.Items[i]) {
 			return false, nil
 		}
-		for _, n := range nodes.Items {
-			if !nodeReady(&n) {
-				return false, nil
-			}
-		}
-		return true, nil
-	})
+	}
+	return true, nil
 }
 
 func nodeReady(n *corev1.Node) bool {
@@ -137,22 +147,18 @@ func (c *Controller) applyESO(ctx context.Context, cfg *Config) error {
 	return nil
 }
 
-// waitStoreValid blocks until the ClusterSecretStore reports Ready=True.
-// design §5.2. A missing CRD (placeholder ESO tier) is treated as not-ready,
-// not as a hard error, so the scaffold reconciles cleanly.
-func (c *Controller) waitStoreValid(ctx context.Context, cfg *Config) error {
+// storeValid is the non-blocking unblock predicate for the ESO tier (design
+// §6): true when the ClusterSecretStore reports Ready=True (secrets
+// resolvable). A missing object or unregistered CRD is treated as not-ready
+// (false, nil), never a hard error.
+func (c *Controller) storeValid(ctx context.Context, cfg *Config) (bool, error) {
 	name := cfg.clusterSecretStoreName()
-	return poll(ctx, waitStoreValidTimeout, func(ctx context.Context) (bool, error) {
-		obj, err := c.dyn.Resource(gvrClusterSecretStore).Get(ctx, name, metav1.GetOptions{})
-		if err != nil {
-			if apierrors.IsNotFound(err) {
-				return false, nil
-			}
-			// CRD not registered yet — treat as not-ready (placeholder tier).
-			return false, nil
-		}
-		return conditionTrue(obj.Object, "Ready"), nil
-	})
+	obj, err := c.dyn.Resource(gvrClusterSecretStore).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		// NotFound, or CRD not registered yet -> not-ready (placeholder tier).
+		return false, nil
+	}
+	return conditionTrue(obj.Object, "Ready"), nil
 }
 
 // --- Tier 3: ArgoCD ---
@@ -171,20 +177,18 @@ func (c *Controller) applyArgoCD(ctx context.Context, cfg *Config) error {
 	return nil
 }
 
-// waitArgoCDHealthy blocks until the argocd-server Deployment is available.
-// design §5.3.
-func (c *Controller) waitArgoCDHealthy(ctx context.Context, cfg *Config) error {
+// argoCDHealthy is the non-blocking unblock predicate for the ArgoCD tier AND
+// the steady-state watchdog subject (design §6): true when the argocd-server
+// Deployment has >=1 available replica. ArgoCD is the handoff target, so this
+// predicate is also consulted to decide whether downstream tiers may hand off.
+func (c *Controller) argoCDHealthy(ctx context.Context, cfg *Config) (bool, error) {
 	ns := cfg.argoNamespace()
-	return poll(ctx, waitArgoCDTimeout, func(ctx context.Context) (bool, error) {
-		dep, err := c.kube.AppsV1().Deployments(ns).Get(ctx, "argocd-server", metav1.GetOptions{})
-		if err != nil {
-			if apierrors.IsNotFound(err) {
-				return false, nil
-			}
-			return false, nil
-		}
-		return dep.Status.AvailableReplicas >= 1, nil
-	})
+	dep, err := c.kube.AppsV1().Deployments(ns).Get(ctx, "argocd-server", metav1.GetOptions{})
+	if err != nil {
+		// NotFound or transient error -> treat as unhealthy (not a hard error).
+		return false, nil
+	}
+	return dep.Status.AvailableReplicas >= 1, nil
 }
 
 // --- Tier 4: generated root Application(s) ---
@@ -224,6 +228,24 @@ func (c *Controller) generateApps(ctx context.Context, cfg *Config) error {
 // appName derives a stable root-app name for a repo entry.
 func appName(i int, repo RepoEntry) string {
 	return fmt.Sprintf("nostos-root-%d", i)
+}
+
+// rootAppsPresent is the non-blocking unblock predicate for the apps tier
+// (design §6): true when every configured root Application object exists in the
+// ArgoCD namespace (ArgoCD can take over sync). With no repos configured there
+// is nothing to generate, so the tier is trivially unblocked. A missing object
+// or unregistered Application CRD is treated as not-ready (false, nil).
+func (c *Controller) rootAppsPresent(ctx context.Context, cfg *Config) (bool, error) {
+	if len(cfg.Repos) == 0 {
+		return true, nil
+	}
+	ns := cfg.argoNamespace()
+	for i, repo := range cfg.Repos {
+		if _, err := c.dyn.Resource(gvrArgoApplication).Namespace(ns).Get(ctx, appName(i, repo), metav1.GetOptions{}); err != nil {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 // --- helpers ---
