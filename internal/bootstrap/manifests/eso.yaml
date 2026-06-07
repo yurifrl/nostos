@@ -1,0 +1,9 @@
+# eso.yaml — TIER 2 (External Secrets Operator + CRDs).
+#
+# TODO(design §4.1/§5): replace with the rendered External-Secrets-Operator
+# manifest (CRDs + operator Deployment + RBAC), parameterized from
+# config.bootstrap. The controller applies CRDs first (the deferred RESTMapper
+# resets after CRDs land so the ClusterSecretStore can map), then the operator.
+#
+# The ClusterSecretStore itself is rendered separately from
+# clustersecretstore.tmpl.yaml because it references the root Secret.

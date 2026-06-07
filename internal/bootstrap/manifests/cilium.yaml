@@ -1,0 +1,9 @@
+# cilium.yaml — TIER 1 (CNI).
+#
+# TODO(design §4.1, risk #2): replace this placeholder with the rendered
+# Cilium manifest (helm template output, no Helm at runtime). It will be
+# parameterized from config.bootstrap.cilium {version, values}. Until then the
+# controller treats an empty payload as "nothing to apply" and the Cilium tier
+# is a no-op that still runs the nodes-Ready wait.
+#
+# Apply order matters: Cilium must be up before anything else schedules.

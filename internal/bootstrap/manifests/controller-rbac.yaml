@@ -1,0 +1,49 @@
+# controller-rbac.yaml — the ServiceAccount + ClusterRole/Binding the
+# nostos-bootstrap controller runs under.
+#
+# The controller installs the CNI, CRDs, RBAC, and operators, so it needs
+# near-cluster-admin. Scope is intentionally broad at bootstrap time; risk #9
+# in the design doc tracks narrowing this once the cluster is up.
+#
+# nostos injects this (rendered) into the Talos machineconfig as an
+# inlineManifest alongside controller-deployment.yaml.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: nostos-bootstrap
+  namespace: kube-system
+  labels:
+    app.kubernetes.io/name: nostos-bootstrap
+    app.kubernetes.io/managed-by: nostos-bootstrap
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: nostos-bootstrap
+  labels:
+    app.kubernetes.io/name: nostos-bootstrap
+    app.kubernetes.io/managed-by: nostos-bootstrap
+rules:
+  # Broad bootstrap authority: the controller installs CNI, CRDs, RBAC, and
+  # operators across every group. This is deliberately wide (design risk #9).
+  - apiGroups: ["*"]
+    resources: ["*"]
+    verbs: ["*"]
+  - nonResourceURLs: ["*"]
+    verbs: ["*"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: nostos-bootstrap
+  labels:
+    app.kubernetes.io/name: nostos-bootstrap
+    app.kubernetes.io/managed-by: nostos-bootstrap
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: nostos-bootstrap
+subjects:
+  - kind: ServiceAccount
+    name: nostos-bootstrap
+    namespace: kube-system

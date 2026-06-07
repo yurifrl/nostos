@@ -1,0 +1,6 @@
+# argocd.yaml — TIER 3 (ArgoCD).
+#
+# TODO(design §4.1/§5): replace with the rendered ArgoCD install manifest
+# (namespace + CRDs + components), parameterized from config.bootstrap.argocd
+# {version, namespace}. The controller waits for argocd-server to become
+# available before generating the root Application(s).

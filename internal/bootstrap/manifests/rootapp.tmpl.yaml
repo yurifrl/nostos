@@ -1,0 +1,37 @@
+# rootapp.tmpl.yaml — TIER 4 app-of-apps root ArgoCD Application.
+#
+# Go text/template rendered ONCE PER config.repos entry (design §4.4). Points
+# ArgoCD at the user's git repo/path; ArgoCD owns everything from there
+# (design §6 ownership boundary). The controller only ever creates/heals these
+# root Applications, never the child apps.
+#
+# Template fields (see internal/bootstrap.appTemplateData):
+#   .Name            generated Application name
+#   .ArgoNamespace   ArgoCD namespace
+#   .RepoURL         user repo URL
+#   .Path            path within the repo
+#   .Revision        target revision (defaults to HEAD)
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: {{ .Name }}
+  namespace: {{ .ArgoNamespace }}
+  labels:
+    app.kubernetes.io/managed-by: nostos-bootstrap
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: {{ .RepoURL }}
+    path: {{ .Path }}
+    targetRevision: {{ .Revision }}
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: {{ .ArgoNamespace }}
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

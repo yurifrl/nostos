@@ -1,0 +1,83 @@
+# controller-deployment.yaml — the in-cluster workload for the
+# nostos-bootstrap controller.
+#
+# CRITICAL (design risk #1, the CNI/scheduling paradox): this pod installs the
+# CNI, so it cannot itself depend on the CNI for an IP. It therefore runs:
+#   - hostNetwork: true            (no pod IP needed)
+#   - tolerations for not-ready    (schedules before the CNI marks nodes Ready)
+#   - tolerations for control-plane taints
+#   - nodeSelector control-plane   (pins to a control-plane node)
+# This mirrors the trick Cilium's own DaemonSet uses to come up pre-CNI.
+#
+# Single replica (design risk #8, SPOF accepted at bootstrap). leader-election
+# can be wired later when a second control-plane joins.
+#
+# nostos injects this (rendered, with the image tag from config.yaml) into the
+# Talos machineconfig as an inlineManifest.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nostos-bootstrap
+  namespace: kube-system
+  labels:
+    app.kubernetes.io/name: nostos-bootstrap
+    app.kubernetes.io/managed-by: nostos-bootstrap
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: nostos-bootstrap
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: nostos-bootstrap
+    spec:
+      serviceAccountName: nostos-bootstrap
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      priorityClassName: system-cluster-critical
+      # Pin to a control-plane node.
+      nodeSelector:
+        node-role.kubernetes.io/control-plane: ""
+      # Schedule before the CNI is up and tolerate control-plane taints.
+      tolerations:
+        - key: node.kubernetes.io/not-ready
+          operator: Exists
+          effect: NoSchedule
+        - key: node.kubernetes.io/not-ready
+          operator: Exists
+          effect: NoExecute
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+        - key: node-role.kubernetes.io/master
+          operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: controller
+          # TODO: pin to a real, pushed multi-arch tag (design §10/§11).
+          # Image tag is rendered from config.yaml at `nostos render` time.
+          image: ghcr.io/yurifrl/nostos-bootstrap:TODO
+          imagePullPolicy: IfNotPresent
+          args:
+            - --interval=60s
+            - --log-format=json
+          env:
+            - name: NOSTOS_BOOTSTRAP_NAMESPACE
+              value: kube-system
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65532
+            capabilities:
+              drop: ["ALL"]
