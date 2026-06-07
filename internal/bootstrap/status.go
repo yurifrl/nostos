@@ -13,7 +13,9 @@ import (
 	"k8s.io/client-go/kubernetes"
 )
 
-// TierState is the lifecycle state of one bootstrap tier (design §7).
+// TierState is the transient, per-reconcile activity of one bootstrap tier
+// (design §7). It describes what the controller is doing *this tick*; it is not
+// the durable handoff state (see TierPhase).
 type TierState string
 
 const (
@@ -23,9 +25,28 @@ const (
 	TierFailed   TierState = "Failed"
 )
 
+// TierPhase is the durable bootstrap-to-handoff phase of a tier (design §6). It
+// is persisted in the status ConfigMap and restored on controller startup so
+// the handoff decision survives restarts. The lifecycle is strictly forward
+// (pending -> unblocked -> handed-off) except for an explicit watchdog reset
+// back to pending when ArgoCD vanishes (re-engage).
+type TierPhase string
+
+const (
+	// PhasePending: the tier is not yet up enough to stop blocking others.
+	PhasePending TierPhase = "pending"
+	// PhaseUnblocked: the tier's unblock condition is met, but ArgoCD (the day-2
+	// owner) is not yet healthy, so ownership has not transferred.
+	PhaseUnblocked TierPhase = "unblocked"
+	// PhaseHandedOff: unblock condition met AND ArgoCD healthy; ArgoCD owns the
+	// tier now. The controller stops applying/reconciling it (design §6).
+	PhaseHandedOff TierPhase = "handed-off"
+)
+
 // TierStatus is the rolled-up state of a single tier.
 type TierStatus struct {
 	State     TierState `json:"state"`
+	Phase     TierPhase `json:"phase"`
 	Message   string    `json:"message,omitempty"`
 	UpdatedAt time.Time `json:"updatedAt"`
 }
@@ -33,6 +54,11 @@ type TierStatus struct {
 func (t *TierStatus) set(state TierState, msg string) {
 	t.State = state
 	t.Message = msg
+	t.UpdatedAt = time.Now().UTC()
+}
+
+func (t *TierStatus) setPhase(phase TierPhase) {
+	t.Phase = phase
 	t.UpdatedAt = time.Now().UTC()
 }
 
@@ -48,10 +74,10 @@ type Status struct {
 	LastReconcile time.Time  `json:"lastReconcile"`
 }
 
-// newStatus seeds every tier as Pending.
+// newStatus seeds every tier as Pending/pending.
 func newStatus() *Status {
 	now := time.Now().UTC()
-	pending := TierStatus{State: TierPending, UpdatedAt: now}
+	pending := TierStatus{State: TierPending, Phase: PhasePending, UpdatedAt: now}
 	return &Status{Cilium: pending, ESO: pending, ArgoCD: pending, Apps: pending}
 }
 
@@ -77,6 +103,10 @@ func writeStatus(ctx context.Context, kube kubernetes.Interface, namespace strin
 		"eso":           string(s.ESO.State),
 		"argocd":        string(s.ArgoCD.State),
 		"apps":          string(s.Apps.State),
+		"cilium.phase":  string(s.Cilium.Phase),
+		"eso.phase":     string(s.ESO.Phase),
+		"argocd.phase":  string(s.ArgoCD.Phase),
+		"apps.phase":    string(s.Apps.Phase),
 		"lastError":     s.LastError,
 		"lastReconcile": s.LastReconcile.Format(time.RFC3339),
 	}
@@ -114,3 +144,24 @@ func writeStatus(ctx context.Context, kube kubernetes.Interface, namespace strin
 }
 
 func ptrBool(b bool) *bool { return &b }
+
+// readStatus reads back the persisted status ConfigMap (status.json) so the
+// controller can restore durable handoff phases across restarts (design §6:
+// "persisted ... so it survives controller restarts (read it back on
+// startup)"). A missing or unparseable ConfigMap is not an error: callers treat
+// it as "no prior state" and start every tier at PhasePending.
+func readStatus(ctx context.Context, kube kubernetes.Interface, namespace string) (*Status, error) {
+	cm, err := kube.CoreV1().ConfigMaps(namespace).Get(ctx, StatusConfigMapName, metav1.GetOptions{})
+	if err != nil {
+		return nil, err
+	}
+	raw, ok := cm.Data["status.json"]
+	if !ok {
+		return nil, fmt.Errorf("status configmap %s/%s missing status.json", namespace, StatusConfigMapName)
+	}
+	var s Status
+	if err := json.Unmarshal([]byte(raw), &s); err != nil {
+		return nil, fmt.Errorf("parse status.json: %w", err)
+	}
+	return &s, nil
+}
