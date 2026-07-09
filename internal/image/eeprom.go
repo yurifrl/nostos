@@ -37,7 +37,7 @@ var EEPROMFiles = []string{
 // requires platform-specific tools (mkfs.fat / hdiutil) which are not
 // universally available. A directory is trivially flashable cross-platform:
 // `cp -R <dir>/* /Volumes/RECOVERY/`.
-func writeEEPROMImage(outPath, firmwareDir string) error {
+func WriteEEPROMImage(outPath, firmwareDir string) error {
 	if err := os.MkdirAll(outPath, 0o755); err != nil {
 		return fmt.Errorf("mkdir eeprom dir: %w", err)
 	}

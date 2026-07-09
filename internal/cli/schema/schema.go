@@ -121,7 +121,7 @@ var Registry = map[string]Meta{
 		},
 	},
 	"pxe": {
-		Description: "Start PXE server (HTTP + dnsmasq) until Ctrl+C.",
+		Description: "Start PXE server (HTTP + dnsmasq) until Ctrl+C. Dispatches the boot script per booting MAC from config.yaml: a node's os.name selects talos (default) or proxmox; for proxmox, os.version is latest (newest release auto-resolved) or a pinned release like 8.3-1.",
 	},
 	"pxe.setup": {
 		Description:     "Install a scoped NOPASSWD sudoers drop-in so `nostos pxe` runs dnsmasq without a password prompt.",
