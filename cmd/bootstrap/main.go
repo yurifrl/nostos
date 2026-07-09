@@ -1,7 +1,7 @@
 // Package main is the nostos-bootstrap controller entrypoint.
 //
 // This is the in-cluster, self-healing bootstrap controller (design doc
-// .agents/drafts/nostos-cluster-bootstrap-controller.md). It runs as a
+// nostos/docs/design/cluster-bootstrap-controller.md). It runs as a
 // single-replica Deployment on a control-plane node with hostNetwork, comes up
 // before the CNI, and drives the cluster from bare apiserver to "ArgoCD
 // reconciling the user's repo" via an ordered, idempotent reconcile loop.

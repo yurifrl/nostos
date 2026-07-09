@@ -1,0 +1,534 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>nostos v0.3 — Dashboard, AI-CLI &amp; Hygiene</title>
+<style>
+:root{--bg:#0f1216;--bg-elev:#161a21;--bg-elev2:#1c222b;--fg:#e6e6e6;--fg-mute:#a8b0bd;--accent:#7aa2f7;--accent-2:#bb9af7;--ok:#9ece6a;--warn:#e0af68;--err:#f7768e;--code-bg:#11151c;--code-fg:#cfd8e3;--rule:#262d38}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;background:var(--bg);color:var(--fg);font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+a{color:var(--accent);text-decoration:none}
+a:hover{text-decoration:underline}
+code,pre,kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:13.5px}
+code{background:var(--code-bg);color:var(--code-fg);padding:1px 6px;border-radius:4px;border:1px solid var(--rule)}
+pre{background:var(--code-bg);color:var(--code-fg);padding:14px 16px;border-radius:8px;border:1px solid var(--rule);overflow-x:auto;line-height:1.45;white-space:pre}
+pre code{background:none;border:0;padding:0}
+kbd{background:var(--bg-elev2);border:1px solid var(--rule);border-bottom-width:2px;border-radius:4px;padding:1px 6px;color:#fff}
+h1,h2,h3,h4{color:#fff;line-height:1.25}
+h1{font-size:2rem;margin:0 0 .5rem 0}
+h2{font-size:1.45rem;margin:2.4rem 0 .8rem;border-bottom:1px solid var(--rule);padding-bottom:.4rem;color:var(--accent)}
+h3{font-size:1.1rem;margin:1.5rem 0 .5rem;color:var(--accent-2)}
+h4{font-size:1rem;margin:1.1rem 0 .3rem;color:#dfe7f5}
+hr{border:0;border-top:1px solid var(--rule);margin:2rem 0}
+.layout{display:grid;grid-template-columns:260px 1fr;gap:32px;max-width:1280px;margin:0 auto;padding:24px}
+.toc{position:sticky;top:24px;align-self:start;max-height:calc(100vh - 48px);overflow-y:auto;background:var(--bg-elev);border:1px solid var(--rule);border-radius:10px;padding:14px 16px}
+.toc h4{margin-top:0;color:var(--fg-mute);font-size:.78rem;text-transform:uppercase;letter-spacing:.06em}
+.toc ol{margin:0;padding-left:18px}
+.toc li{margin:.25rem 0;font-size:.92rem}
+.content{min-width:0;max-width:1100px}
+.titlebar{background:linear-gradient(135deg,#1a1f2b,#1c2433);border:1px solid var(--rule);padding:22px 24px;border-radius:12px;margin-bottom:18px}
+.titlebar .meta{color:var(--fg-mute);font-size:.92rem;margin-top:.4rem}
+.lede{color:var(--fg-mute);font-size:1.02rem}
+.card{background:var(--bg-elev);border:1px solid var(--rule);border-radius:10px;padding:14px 18px;margin:14px 0}
+.card h3,.card h4{margin-top:0}
+.card.bug{border-left:3px solid var(--err)}
+.card.fixed{border-left:3px solid var(--ok)}
+.card.decision{border-left:3px solid var(--accent)}
+.card.cli{border-left:3px solid var(--accent-2)}
+.card.review{border-left:3px solid var(--warn)}
+.tag{display:inline-block;font-size:.72rem;letter-spacing:.04em;text-transform:uppercase;padding:1px 8px;border-radius:999px;border:1px solid var(--rule);color:var(--fg-mute);margin-left:6px;vertical-align:middle}
+.tag.ok{color:var(--ok);border-color:#2c4a25}
+.tag.warn{color:var(--warn);border-color:#5a4322}
+.tag.err{color:var(--err);border-color:#5a2630}
+.tag.def{color:var(--accent);border-color:#27395c}
+.tag.muted{color:var(--fg-mute)}
+table{border-collapse:collapse;width:100%;margin:.6rem 0;font-size:.94rem}
+th,td{border:1px solid var(--rule);padding:6px 10px;text-align:left;vertical-align:top}
+th{background:var(--bg-elev2);color:#fff}
+.path{color:var(--accent);background:#0c1320;border:1px solid #21314f;padding:1px 6px;border-radius:4px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:13.5px}
+ul.tight,ol.tight{margin:.3rem 0 .3rem 1.2rem}
+ul.tight li,ol.tight li{margin:.15rem 0}
+.note{border:1px dashed var(--rule);background:#141923;padding:10px 14px;border-radius:8px;color:var(--fg-mute);font-size:.93rem;margin:10px 0}
+.tag-row{display:flex;flex-wrap:wrap;gap:6px;margin:.4rem 0}
+.cards-2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.cards-2>.card{margin:0}
+@media (max-width:900px){.layout{grid-template-columns:1fr}.toc{position:static;max-height:none}.cards-2{grid-template-columns:1fr}}
+@media print{.toc{display:none}.layout{display:block;max-width:none;padding:0}body{background:#fff;color:#000}a{color:#003;text-decoration:underline}pre,code{background:#f4f4f4;color:#000;border-color:#bbb}.card{border-color:#bbb;background:#fafafa}}
+</style>
+</head>
+<body>
+<div class="layout">
+<aside class="toc" aria-label="Table of contents">
+<h4>nostos v0.3</h4>
+<ol>
+<li><a href="#summary">1. Executive summary</a></li>
+<li><a href="#whatsnew">2. What's new vs v0.2</a></li>
+<li><a href="#arch">3. Architecture map</a></li>
+<li><a href="#dashboard">4. The dashboard</a></li>
+<li><a href="#cli">5. AI-friendly CLI</a></li>
+<li><a href="#mcp">6. MCP server</a></li>
+<li><a href="#bugs">7. Bug fixes</a></li>
+<li><a href="#guide">8. Operator guide</a></li>
+<li><a href="#tests">9. Tests</a></li>
+<li><a href="#reviews">10. The four reviews</a></li>
+<li><a href="#roadmap">11. Roadmap v0.4</a></li>
+<li><a href="#files">12. File locations</a></li>
+</ol>
+</aside>
+<main class="content">
+
+<section class="titlebar" id="summary">
+<h1>nostos v0.3 — Dashboard, AI-CLI &amp; Hygiene</h1>
+<div class="meta">Companion to <a href="nostos-v02.html">v0.2</a>. Sources: <span class="path">openspec/changes/nostos-v03-dashboard-and-hygiene/</span>, <span class="path">docs/nostos-guide.md</span>, <span class="path">.submodules/nostos/AGENTS.md</span>, and the v0.3 review synthesis. Generated 2026-05-25.</div>
+<p class="lede" style="margin-top:14px">v0.2 shipped the <strong>Provisioner</strong> abstraction; v0.3 closes its operational gaps and turns the CLI into something an agent can drive. Headline deliverables: four production bug fixes, a read-only Bubble Tea dashboard, a JSON contract on every command, an embedded operator guide, and a deliberately retired <code>taskfiles/turing.yml</code>.</p>
+<ul class="tight">
+<li><strong>4 v0.2 bugs closed</strong> — <code>BootTimeout</code> per-provisioner, image-cache TOFU two-phase commit, BMC pre-flight with typed errors, regression test for the empty-filename fix.</li>
+<li><strong>AI-friendly CLI</strong> — <code>--output json</code> on every command, <code>nostos schema</code>, <code>--fields</code>, <code>--dry-run</code> with zero subprocess invocations, structured errors in the <code>10–15</code> exit-code range, control-char + path-traversal hardening.</li>
+<li><strong>Read-only dashboard MVP</strong> — discovery, 5 aggregate states, fast/slow refresh tiers, headless <code>--once</code>, embedded living docs for <code>dell-optiplex-3080m</code> and <code>turing-rk1</code>. Action dispatch (<kbd>r</kbd>/<kbd>d</kbd>/<kbd>i</kbd>) deferred to v0.4.</li>
+<li><strong>Operator guide</strong> at <span class="path">docs/nostos-guide.md</span> — install + recover + reference; per-vendor playbooks and OAuth deep-dive deferred to v0.4.</li>
+</ul>
+<div class="tag-row">
+<span class="tag def">Streams: A B1–B3 C1–C7 D E1–E4</span>
+<span class="tag ok">206 tests / 18+ packages</span>
+<span class="tag warn">B4 / C8 / dashboard actions → v0.4</span>
+<span class="tag muted">No new provisioners (Redfish/Proxmox/USB stay separate)</span>
+</div>
+</section>
+
+<h2 id="whatsnew">2. What's new in v0.3 vs v0.2</h2>
+<p>The change set is organised as five streams. The table below maps each stream to what actually shipped and what was explicitly deferred. Source: <span class="path">openspec/changes/nostos-v03-dashboard-and-hygiene/proposal.md</span> &amp; <span class="path">v0.3/synthesis.md</span>.</p>
+
+<table>
+<thead><tr><th style="width:9%">Stream</th><th style="width:32%">Scope</th><th>Delivered in v0.3</th><th style="width:22%">Deferred</th></tr></thead>
+<tbody>
+<tr>
+<td><strong>A</strong></td>
+<td>v0.2 bug fixes (#1, #2, #5, #6)</td>
+<td><code>MaxWaitMaintenance()</code> per provisioner; image-cache stream-hash + atomic record-after-rename; BMC TCP+HTTP pre-flight with <code>ErrBMCUnreachable / Auth / Version</code>; pinned regression test for the empty-filename render.</td>
+<td>—</td>
+</tr>
+<tr>
+<td><strong>B1–B3</strong></td>
+<td>Hygiene / taskfile retirement</td>
+<td><code>taskfiles/turing.yml::flash|download|install-talos|get</code> deprecated (print &amp; <code>exit 1</code>). <code>task turing:install</code> aliases <code>task nostos:install</code>. Zombie-node deletion documented.</td>
+<td><strong>B4</strong> Tailscale device cleanup (security review flagged tailnet spoofing).</td>
+</tr>
+<tr>
+<td><strong>C1–C7</strong></td>
+<td>AI-friendly CLI hardening</td>
+<td><code>--output json</code>, <code>nostos schema</code>, <code>--fields</code>, <code>--dry-run</code> (zero subprocesses, <code>would_execute[]</code>), structured errors with codes 10–15, control-char (<code>0x00–0x1F</code> + <code>0x7F</code>) + symlink-resolved path checks, <code>AGENTS.md</code>.</td>
+<td><strong>C8</strong> MCP server.</td>
+</tr>
+<tr>
+<td><strong>D</strong></td>
+<td>Bubble Tea v2 dashboard</td>
+<td>Read-only MVP: discovery (ARP+ICMP, mDNS, Talos maintenance, Tailscale, ArgoCD), hardcoded check registry, 5 aggregate states, fast (5 s) + slow (5 min) tiers, headless <code>--once --output json</code>, embedded playbooks for <code>dell-optiplex-3080m</code> + <code>turing-rk1</code>, <kbd>n</kbd>/<kbd>H</kbd>/<kbd>s</kbd>/<kbd>u</kbd>/<kbd>G</kbd>/<kbd>/</kbd>/<kbd>?</kbd>.</td>
+<td>Action dispatch <kbd>r</kbd>/<kbd>d</kbd>/<kbd>i</kbd>, guided-fix dispatcher, <code>cluster upgrade</code> mutation.</td>
+</tr>
+<tr>
+<td><strong>E1–E4</strong></td>
+<td>Operator guide v1</td>
+<td><span class="path">docs/nostos-guide.md</span> sections 0–3 + 7 + 9 (what-you-get, hardware, first-time setup, PXE+TPI flows, recovery, reference). Explicit "do not commit" list.</td>
+<td><strong>E5–E9</strong> per-vendor playbooks (§5), Tailscale OAuth deep-dive (§6).</td>
+</tr>
+</tbody>
+</table>
+
+<div class="card decision">
+<h4>What was cut from the v0.3 proposal during review</h4>
+<ul class="tight">
+<li>"Guided-fix dispatcher" north-star framing — reframed as <em>live status board, not autopilot</em> (critic + UX).</li>
+<li>4-tier refresh cadence (200 ms / 5 s / 30 s / 5 m) — collapsed to fast 5 s + slow 5 min.</li>
+<li>Cold-start <code>dashboard-state.json</code> snapshot — Bubble Tea cold start is fast enough.</li>
+<li>Plugin-ready check registry — picked hardcoded; v0.4 redesigns with concrete use cases.</li>
+<li>Vendor playbooks <code>generic-amd64</code> + <code>raspberry-pi-5</code> — don't ship docs for hardware we don't run.</li>
+<li>12-entry exit-code catalogue — collapsed to 6 (success / generic / validation / network / auth / conflict).</li>
+</ul>
+</div>
+
+<h2 id="arch">3. Architecture map</h2>
+<p>v0.3 adds six new internal packages and rewrites two. The Provisioner interface from v0.2 is unchanged except for an additive <code>MaxWaitMaintenance()</code> method (default zero, so existing providers keep working).</p>
+
+<pre><code>.submodules/nostos/
+├── cmd/nostos/                       main package; cobra wiring only
+├── internal/
+│   ├── cli/
+│   │   ├── jsonio/        NEW       --output json encoder + NDJSON streamer + --fields projector
+│   │   ├── schema/        NEW       reflection-driven schema builder; powers `nostos schema`
+│   │   ├── dryrun/        NEW       typed Plan{would_execute:[…]} populated by mutations
+│   │   ├── errs/          NEW       structured {error,code,message,details}; E_* catalogue
+│   │   ├── inputx/        NEW       control-char + path-traversal + op:// validators (+ 4 fuzz targets)
+│   │   └── …              changed   every cobra command rewires through jsonio + errs
+│   ├── cluster/
+│   │   └── orchestrate.go changed   honours max(opts.Deadline, prov.MaxWaitMaintenance())
+│   ├── provisioner/
+│   │   ├── tpi/
+│   │   │   ├── image_cache.go       rewritten   stream-hash to *.part → atomic rename → record digest
+│   │   │   └── bmc_preflight.go NEW TCP:443 + HTTP /  → typed ErrBMCUnreachable / Auth / Version
+│   │   └── pxe/                     unchanged (MaxWaitMaintenance returns 0)
+│   ├── discovery/         NEW       ARP, ICMP, mDNS, Talos maintenance probe, Tailscale list, ArgoCD list
+│   ├── dashboard/         NEW       Bubble Tea v2 model + hardcoded check registry + actions seam (read-only)
+│   │   ├── model.go                 root model; fast/slow tier ticks
+│   │   ├── checks/                  cluster / per-node / per-app probes
+│   │   ├── docs/          embed.FS  dell-optiplex-3080m.md, turing-rk1.md
+│   │   └── actions/                 read-only chords; v0.4 wires r/d/i mutations
+│   ├── secrets/                     unchanged
+│   └── mcp/               DEFERRED  Stream C8 → v0.4
+└── AGENTS.md              NEW       invariants for AI/CLI callers
+</code></pre>
+
+<p>Code <em>changed</em> rather than added: <code>internal/cluster/orchestrate.go</code> (per-provisioner deadline), every <code>internal/cli/*.go</code> command (jsonio wiring), and the v0.2 taskfiles (deprecation stubs).</p>
+
+<h2 id="dashboard">4. The dashboard <span class="tag def">read-only MVP</span></h2>
+<p><code>nostos dashboard</code> is a Bubble Tea v2 single-window TUI: cluster health, per-node health, ArgoCD app health, discovery sweep, version drift — one pane. v0.3 framing is deliberate: <em>live status board, not autopilot</em>.</p>
+
+<h3>4.1 ASCII reference layout</h3>
+<pre><code>┌─ nostos dashboard ─────────────────────────── home-systems / 2026-05-25 11:42 ─┐
+│ aggregate: ⚠  DEGRADED       Press G to open the upgrade preview.              │
+├─ cluster ──────────────────────────────────────────────────────────────────────┤
+│ ✓ etcd quorum 3/3      ✓ k8s api    ✓ argocd 28/29 synced    ⚠ talos 1.10.3→.4 │
+│ ✓ tailscale 4/4 online                                                         │
+├─ nodes ────────────────────────────────────────────────────────────────────────┤
+│ ✓ dell01   100  controlplane  Ready  apid 1.10.3   tailnet ✓  schematic ✓     │
+│ ✓ tp1      107  worker        Ready  apid 1.10.3   tailnet ✓  schematic ✓     │
+│ ✓ tp4      114  worker        Ready  apid 1.10.3   tailnet ✓  schematic ✓     │
+│ ⚠ pc01     104  worker        Ready  apid 1.10.2   tailnet ✓  schematic drift │
+├─ discoveries ──────────────────────────────────────────────────────────────────┤
+│ ?  aa:bb:cc:dd:ee:ff  192.168.68.142   unknown   (press [n] to name)          │
+├─ apps ─────────────────────────────────────────────────────────────────────────┤
+│ ✓ argo-workflows  ✓ grafana  ✓ istio-system  ⚠ miniflux (chart 2.0.46→2.0.49) │
+└─ [n]ame  [H]ide  [s]etup-info  [u]pgrade  [/]search  [G]uide  [?]help  [q]uit ┘
+</code></pre>
+
+<h3>4.2 Five aggregate states</h3>
+<table>
+<thead><tr><th>State</th><th>Trigger</th><th>Top-bar imperative</th></tr></thead>
+<tbody>
+<tr><td><code>ALL_GREEN</code></td><td>every probe in every tier passes</td><td>—</td></tr>
+<tr><td><code>DEGRADED</code></td><td>≥1 non-fatal probe failed (e.g. upstream patch available)</td><td>"Press G to open the upgrade preview."</td></tr>
+<tr><td><code>BROKEN</code></td><td>≥1 fatal probe failed (k8s api, kubelet NotReady, etcd unhealthy)</td><td>"Press G to open the recovery section for: …"</td></tr>
+<tr><td><code>UNCONFIGURED</code></td><td>zero nodes in <code>config.yaml</code></td><td>4-step CTA replaces the body — never green</td></tr>
+<tr><td><code>TRANSITIONING</code></td><td>any per-node <code>flock</code> held (install in flight from another shell)</td><td>"Hold; install in progress."</td></tr>
+</tbody>
+</table>
+<p class="note"><strong>Why <code>UNCONFIGURED</code> is its own state:</strong> a green bar on a zero-node cluster is technically true but useless. The CTA is the opinionated alternative.</p>
+
+<h3>4.3 Refresh tiers</h3>
+<p>Two tiers — both run synchronously inside the Bubble Tea event loop, no separate goroutine pool:</p>
+<ul class="tight">
+<li><strong>fast (5 s)</strong> — ICMP, Talos apid, Tailscale presence, k8s API. Anything cheap.</li>
+<li><strong>slow (5 min)</strong> — schematic-vs-running diff, Talos upstream-release diff (factory.talos.dev), Helm chart vs OCI registry HEAD, ArgoCD application sync state.</li>
+</ul>
+<p>Upstream diffs are cached at <span class="path">~/.cache/nostos/upstream-versions.json</span> (24 h TTL). Cold start hydrates from cache, then refreshes in the background. <strong>BMC pre-flight is not on either tier</strong> — it runs only inside <code>node install</code> or explicit <code>nostos node check</code> (security review §A3).</p>
+
+<h3>4.4 Action chords</h3>
+<p>Footer is <em>contextual by selected row</em>. Capital <kbd>H</kbd>/<kbd>G</kbd> deliberately avoid collision with potential lower-case actions in v0.4.</p>
+<table>
+<thead><tr><th>Chord</th><th>Where</th><th>What</th><th>v0.3</th></tr></thead>
+<tbody>
+<tr><td><kbd>n</kbd></td><td>unknown discovery row</td><td>emit a <code>nodes:</code> patch on stdout (no write)</td><td>shipped</td></tr>
+<tr><td><kbd>H</kbd></td><td>any row</td><td>toggle hidden/visible (persists in <span class="path">~/.config/nostos/dashboard.toml</span>)</td><td>shipped</td></tr>
+<tr><td><kbd>s</kbd></td><td>known node</td><td>open per-vendor playbook in a Glamour panel</td><td>shipped</td></tr>
+<tr><td><kbd>u</kbd></td><td>any</td><td><code>cluster upgrade --dry-run</code> diff (preview only)</td><td>shipped</td></tr>
+<tr><td><kbd>G</kbd></td><td>any</td><td>open the relevant section of the operator guide read-only</td><td>shipped</td></tr>
+<tr><td><kbd>/</kbd> <kbd>?</kbd></td><td>any</td><td>filter rows / curated help (not auto-gen from schema)</td><td>shipped</td></tr>
+<tr><td><kbd>r</kbd> <kbd>d</kbd> <kbd>i</kbd></td><td>known node</td><td>reinstall / delete / identify</td><td><span class="tag warn">v0.4</span></td></tr>
+</tbody>
+</table>
+<p>Symbols are colorblind-safe: <code>✓ ⚠ ✗ ?</code> in colour terminals; bracket variants <code>[OK] [WARN] [FAIL] [?]</code> under <code>NO_COLOR=1</code>, non-TTY, or <code>--ascii</code>. Color is never the sole carrier of state.</p>
+
+<h3>4.5 Headless mode</h3>
+<pre><code>./.bin/nostos dashboard --once --output json | jq '.aggregate_state'
+./.bin/nostos dashboard --once --output json --fields aggregate_state,nodes,checks
+./.bin/nostos dashboard --once --output json --no-upstream   # skip HTTP for CI</code></pre>
+<p>Default exit code on <code>--once</code> is <code>0</code> regardless of state. Opt in to non-zero with <code>--exit-nonzero-on-broken</code>: returns <code>11</code> for network-class dominant failure, <code>13</code> for conflict (e.g. <code>TRANSITIONING</code>).</p>
+
+<h2 id="cli">5. AI-friendly CLI surface</h2>
+<p>v0.3 puts every <code>nostos</code> subcommand through the eight principles from the <em>ai-friendly-cli</em> skill. The result is a CLI that an agent can plan against, dry-run, and parse without screen-scraping lipgloss output.</p>
+
+<div class="card cli">
+<h4><code>--output json</code> &amp; NDJSON <span class="tag def">C1</span></h4>
+<p>Every command that prints prose today gains <code>--output json</code>. List operations stream NDJSON (one JSON object per line) so an agent can consume incrementally without buffering. Default remains <code>text</code> for humans; setting <code>NOSTOS_OUTPUT=json</code> in the environment flips the default per-shell. Errors in JSON mode print to <strong>stdout</strong> (so an agent reading one stream sees them); errors in text mode go to stderr.</p>
+</div>
+
+<div class="card cli">
+<h4><code>nostos schema</code> <span class="tag def">C2</span></h4>
+<p>Reflection-driven schema introspection. With no argument it emits the full command tree (flags, args, types, required, enum, description) as JSON. With an argument it emits a single command's schema; with <code>--exit-codes</code> it dumps the typed exit-code catalogue. The dashboard's <kbd>?</kbd> help is <em>not</em> auto-generated from this — help is curated prose — but agents and shell completion machinery share one source of truth.</p>
+</div>
+
+<div class="card cli">
+<h4><code>--fields</code> token-cost discipline <span class="tag def">C3</span></h4>
+<p>Field masks on every command that emits JSON: <code>--fields=id,ip,role</code>. Unknown identifiers fail with <code>E_FIELDS_UNKNOWN</code>; empty entries (<code>a,,b</code>) fail with <code>E_FIELDS_EMPTY</code>; control chars in the mask fail with <code>E_FIELDS_CONTROL</code>. Designed so an agent can constrain its own context-window footprint without parsing the full payload first.</p>
+</div>
+
+<div class="card cli">
+<h4><code>--dry-run</code> with zero subprocess invocations <span class="tag def">C4</span></h4>
+<p>Every mutation (<code>node install</code>, <code>secrets keys revoke</code>, future <code>cluster upgrade</code>) accepts <code>--dry-run</code>. Contract per the tests review: <strong>zero <code>os/exec</code> calls</strong>, output JSON contains <code>would_execute: [...]</code>, and re-running without <code>--dry-run</code> produces an execution sequence that is a (sub)sequence of <code>would_execute</code>. Exit code on dry-run is <code>0</code> with payload <code>status:"preview"</code> — there is deliberately no dedicated dry-run exit code.</p>
+</div>
+
+<div class="card cli">
+<h4>Structured errors + exit codes <span class="tag def">C5</span></h4>
+<p>Errors are JSON objects: <code>{error, code, message, details}</code> where <code>code</code> is an <code>E_*</code> identifier (<code>E_NODE_NAME_CONTROL</code>, <code>E_BMC_UNREACHABLE</code>, etc.) and <code>details</code> is a free-form bag (e.g. <code>{host:"…", port:443}</code>). Exit codes use the <code>10–15</code> range so they don't collide with shell idioms (<code>1</code> stays "generic"):</p>
+<table>
+<thead><tr><th>Code</th><th>Category</th></tr></thead>
+<tbody>
+<tr><td>0</td><td>success</td></tr>
+<tr><td>1</td><td>internal_error (un-classified bug)</td></tr>
+<tr><td>10</td><td>validation_failed</td></tr>
+<tr><td>11</td><td>network_error</td></tr>
+<tr><td>12</td><td>auth_error</td></tr>
+<tr><td>13</td><td>conflict</td></tr>
+<tr><td>14</td><td>not_found</td></tr>
+<tr><td>15</td><td>timeout</td></tr>
+</tbody>
+</table>
+<p>BMC-specific failures from the tpi provider (<code>ErrBMCUnreachable</code>, <code>ErrBMCAuth</code>, <code>ErrBMCVersion</code>) map onto these categories <em>and</em> carry sub-causes in <code>details.code</code> rather than burning unique top-level numbers. Eliminates the v0.2 review's exit-code-8 collision concern.</p>
+</div>
+
+<div class="card cli">
+<h4>Input hardening <span class="tag def">C6</span></h4>
+<p><code>internal/cli/inputx/</code> rejects all ASCII control characters (<code>0x00–0x1F</code> + <code>0x7F</code>) in any user-supplied string, not just node names. Path validation rejects <code>..</code> after lex-clean <em>and</em> any path that resolves outside <code>$HOME</code> or the repo root <strong>after symlink resolution</strong>. <code>op://</code> refs cannot carry query strings or fragments. YAML inputs whose anchors resolve to filesystem paths are rejected. Four <code>FuzzNodeName / FuzzOpRef / FuzzConfigPath / FuzzFieldMask</code> targets at a 5 s budget each guard the contract.</p>
+</div>
+
+<h2 id="mcp">6. MCP server <span class="tag warn">deferred to v0.4</span></h2>
+<p>Stream C8 (Model Context Protocol) is <strong>deferred to v0.4</strong>. The v0.3 contract is the JSON CLI; v0.4 wraps it as JSON-RPC 2.0 over stdio. The shape below is documented now so the operator guide §9.5 ships with concrete examples and so v0.4 can implement against a stable surface.</p>
+
+<h3>6.1 Protocol summary</h3>
+<ul class="tight">
+<li><strong>Transport:</strong> stdio, JSON-RPC 2.0, framed by newlines.</li>
+<li><strong>Tool naming:</strong> one tool per cobra command — <code>nostos.&lt;method-id&gt;</code>. Single source of truth: cobra → schema → MCP.</li>
+<li><strong>Input schema:</strong> derived from cobra flags via <code>internal/cli/schema</code>. No second schema to keep in sync.</li>
+<li><strong>Return shape:</strong> identical to <code>nostos &lt;cmd&gt; --output json</code>.</li>
+</ul>
+
+<h3>6.2 Sample <code>tools/list</code></h3>
+<pre><code>$ echo '{"jsonrpc":"2.0","method":"tools/list","id":1}' | ./.bin/nostos mcp | jq '.result.tools[].name'
+"nostos.bootstrap"
+"nostos.build"
+"nostos.cluster.cleanup"
+"nostos.config.show"
+"nostos.dashboard"
+"nostos.node.install"
+"nostos.node.list"
+"nostos.node.remove"
+"nostos.node.show"
+"nostos.schema"
+"nostos.secrets.test"
+"nostos.status"</code></pre>
+
+<h3>6.3 Sample <code>tools/call</code></h3>
+<pre><code>$ echo '{"jsonrpc":"2.0","method":"tools/call","id":2,
+        "params":{"name":"nostos.status","arguments":{}}}' \
+    | ./.bin/nostos mcp | jq '.result.content[0].json'
+{
+  "aggregate_state": "ALL_GREEN",
+  "nodes": [ /* … */ ],
+  "checks": [ /* … */ ]
+}</code></pre>
+
+<h3>6.4 Claude Desktop wiring</h3>
+<pre><code>{
+  "mcpServers": {
+    "nostos": {
+      "command": "/Users/yuri/Workdir/Yuri/home-systems/.bin/nostos",
+      "args": ["mcp"]
+    }
+  }
+}</code></pre>
+
+<h2 id="bugs">7. Bug fixes (the v0.2 backlog)</h2>
+<p>Each card lists the symptom observed during the v0.2 session, the root cause, and the v0.3 fix. Sources: v0.2 session log + <span class="path">openspec/changes/nostos-v03-dashboard-and-hygiene/proposal.md</span> §"Concrete pains".</p>
+
+<div class="cards-2">
+
+<div class="card bug">
+<h3>#1 — <code>BootTimeout</code> too short for RK1 <span class="tag ok">fixed</span></h3>
+<p><strong>Symptom:</strong> orchestrator gives up after 10 min; operator falls back to manual <code>talosctl apply-config --insecure</code>, defeating the point.</p>
+<p><strong>Root cause:</strong> <code>internal/cluster/orchestrate.go:64-65</code> hard-coded a 10-min default; RK1 cold boots routinely take 12–18 min.</p>
+<p><strong>Fix (A1):</strong> add <code>Provisioner.MaxWaitMaintenance() time.Duration</code> (default <code>0</code>). <code>tpi</code> returns <code>30 min</code>, <code>pxe</code> returns <code>0</code> (orchestrator's 20 min stands). Orchestrator uses <code>max(opts.WaitMaintenanceDeadline, prov.MaxWaitMaintenance())</code>; per-flag <code>--wait-deadline</code> still wins.</p>
+</div>
+
+<div class="card bug">
+<h3>#5 — Image-cache TOFU race <span class="tag ok">fixed</span></h3>
+<p><strong>Symptom:</strong> <code>kill -9</code> mid-download leaves a partial file; on the next run there's a chance the corrupt digest gets recorded as canonical.</p>
+<p><strong>Root cause:</strong> <code>internal/provisioner/tpi/image_cache.go:27-39</code> recorded the digest in <code>digests.json</code> <em>after</em> trusting the on-disk file. No two-phase commit.</p>
+<p><strong>Fix (A2):</strong> stream-hash on download into a <code>*.part</code> file → <code>Close+Rename</code> → <code>fsync</code> → <em>then</em> write the digest record, all in one critical section. Temp files at startup are garbage; deleted unconditionally (no resume-from-<code>*.part</code> heuristic — would re-introduce a TOCTOU between byte-count and hash). Cache-hit path recomputes sha256 before trusting any record; mismatched record → delete file and redownload.</p>
+</div>
+
+<div class="card bug">
+<h3>#6 — BMC unreachable surfaces as <code>os error 6</code> <span class="tag ok">fixed</span></h3>
+<p><strong>Symptom:</strong> wrong/unreachable BMC shows up as <em>"Device not configured (os error 6)"</em> from the <code>tpi</code> subprocess. Operators waste 20+ minutes chasing kernel-level red herrings.</p>
+<p><strong>Root cause:</strong> <code>tpi</code> binary's stderr is unfiltered; nostos passed it through verbatim.</p>
+<p><strong>Fix (A3):</strong> BMC pre-flight at <code>internal/provisioner/tpi/bmc_preflight.go</code>. TCP <code>host:443</code> probe → HTTP <code>GET /</code> with auth → typed errors <code>ErrBMCUnreachable</code> / <code>ErrBMCAuth</code> / <code>ErrBMCVersion</code>. Probes are scoped strictly to the configured BMC host (no internal-IP discovery, no <code>/24</code> walking). Token-bucket rate-limit: at most one probe per host per 5 s; failure backoff 5 s → 30 s → 5 min.</p>
+</div>
+
+<div class="card bug">
+<h3>#2 — Empty filename regression <span class="tag ok">fixed</span></h3>
+<p><strong>Symptom:</strong> in v0.2, tpi-rendered configs occasionally produced an empty filename (<code>.yaml</code>) under <code>nostos/state/configs/</code>. Patched late in v0.2 with no pinned regression test.</p>
+<p><strong>Root cause:</strong> the rename path used <code>node.MAC</code> when the tpi flow had not yet populated it from the BMC response.</p>
+<p><strong>Fix (A4):</strong> regression test that loads <code>nodes[tp1]</code>, runs a render with a stub BMC response, and asserts the output filename is non-empty <em>and</em> contains the node identifier. Test lives in <code>internal/provisioner/tpi/render_test.go</code>.</p>
+</div>
+
+</div>
+
+<h2 id="guide">8. Operator guide</h2>
+<p>v0.3 ships the canonical operator guide at <span class="path">docs/nostos-guide.md</span> (1484 lines, install + recover + reference; per-vendor playbooks and OAuth deep-dive deferred to v0.4). Below is the table of contents — every command in the guide is copy-pasteable, every error message has a "what it means" entry, and each design choice is annotated with a "Why" box.</p>
+
+<table>
+<thead><tr><th style="width:14%">§</th><th>Title</th><th>v0.3</th></tr></thead>
+<tbody>
+<tr><td><a href="../../../docs/nostos-guide.md#0-what-this-gets-you">0</a></td><td>What this gets you</td><td>shipped</td></tr>
+<tr><td>1</td><td>Hardware checklist (per-platform, network expectations)</td><td>shipped</td></tr>
+<tr><td>2</td><td>First-time setup (install, <code>init</code>, <code>nostos.yaml</code>, secrets backend)</td><td>shipped</td></tr>
+<tr><td>3</td><td>The PXE flow (Dell, generic amd64) — preflight, build, render, server, install, errors</td><td>shipped</td></tr>
+<tr><td>4</td><td>The TPI flow (Turing Pi 2 / RK1) — schematic, BMC creds, image-cache TOFU, the <code>tpi</code> dance, fallback, cluster cleanup</td><td>shipped</td></tr>
+<tr><td>5</td><td>Per-vendor playbooks (<code>dell-optiplex-3080m</code>, <code>turing-rk1</code>, <code>generic-amd64</code>, <code>raspberry-pi-5</code>)</td><td><span class="tag warn">2/4 shipped</span></td></tr>
+<tr><td>6</td><td>Tailscale OAuth setup (ACL <code>tagOwners</code>, OAuth client, 1Password, validation)</td><td><span class="tag warn">deferred</span></td></tr>
+<tr><td>7</td><td>Recovery scenarios (won't boot, BMC unreachable, etcd quorum, Tailscale revoked, half-flashed RK1)</td><td>shipped</td></tr>
+<tr><td>8</td><td>The dashboard (interactive, headless, refresh tiers, action chords, aggregate states)</td><td>shipped</td></tr>
+<tr><td>9</td><td>Reference — full CLI surface, config schema, exit codes, error catalogue, MCP, file layout, one-liners</td><td>shipped</td></tr>
+</tbody>
+</table>
+
+<p>The guide opens with an explicit <strong>"do not commit" list</strong> at the top: home-network IPs, BMC default credentials, OAuth client IDs and secrets, MAC addresses, <code>op://</code> vault paths, kubeconfig client certs.</p>
+
+<h2 id="tests">9. Tests</h2>
+<p>v0.2 shipped 89 tests across 18 packages. v0.3 lands at <strong>206 tests across 18+ packages</strong>, a 2.3× growth driven by the AI-CLI hardening, the dashboard's deterministic check registry, and the four bug fixes. Highlights:</p>
+
+<table>
+<thead><tr><th>Package</th><th>What it covers</th><th>Tests added</th></tr></thead>
+<tbody>
+<tr><td><code>internal/cli/jsonio</code></td><td>JSON encoder, NDJSON streamer, <code>--fields</code> projector</td><td>22</td></tr>
+<tr><td><code>internal/cli/schema</code></td><td>reflection schema; full-tree + per-command + <code>--exit-codes</code></td><td>14</td></tr>
+<tr><td><code>internal/cli/dryrun</code></td><td><code>Plan</code> shape, zero-subprocess invariant, sub-sequence property</td><td>11</td></tr>
+<tr><td><code>internal/cli/errs</code></td><td>structured-error shape, exit-code mapping, <code>code</code> stability</td><td>9</td></tr>
+<tr><td><code>internal/cli/inputx</code></td><td>control chars, path traversal, <code>op://</code> refs, YAML anchor abuse + <strong>4 fuzz targets</strong></td><td>27 + fuzz</td></tr>
+<tr><td><code>internal/provisioner/tpi/image_cache</code></td><td>two-phase commit, <code>kill -9</code> simulation, cache-hit re-verification</td><td>13</td></tr>
+<tr><td><code>internal/provisioner/tpi/bmc_preflight</code></td><td>typed errors, rate-limit, scope (no <code>/24</code> walk)</td><td>10</td></tr>
+<tr><td><code>internal/provisioner/tpi/render</code></td><td><strong>regression test</strong> for v0.2 empty-filename bug</td><td>3</td></tr>
+<tr><td><code>internal/cluster/orchestrate</code></td><td><code>max(deadline, MaxWaitMaintenance())</code>, flag override</td><td>6</td></tr>
+<tr><td><code>internal/discovery</code></td><td>ARP / ICMP / mDNS / Talos maintenance / Tailscale / ArgoCD probes (mocked)</td><td>21</td></tr>
+<tr><td><code>internal/dashboard/checks</code></td><td>5 aggregate states; <code>UNCONFIGURED</code> + <code>TRANSITIONING</code> + missing-kubeconfig</td><td>18</td></tr>
+<tr><td><code>internal/dashboard/model</code></td><td>fast/slow tier scheduling, headless <code>--once</code> exit-code modes</td><td>12</td></tr>
+<tr><td>v0.2 carry-forward</td><td>provisioner interface, secrets, config, render, etc.</td><td>40</td></tr>
+</tbody>
+</table>
+
+<p class="note">Fuzz targets run with a 5 s budget each in CI; they're not counted in the 206 unit-test total.</p>
+
+<h2 id="reviews">10. The four parallel reviews</h2>
+<p>Before implementation, the v0.3 proposal was put through four independent reviews. Each review's headline finding folded into the synthesis at <span class="path">v0.3/synthesis.md</span> and modified the OpenSpec change.</p>
+
+<div class="card review">
+<h3>Critic review — kill the autopilot framing</h3>
+<p>The headline draft pitched a <em>guided-fix dispatcher</em> as the north star. The critic flagged that this contradicts every Non-Goal in the same document: no autopilot, no Tailscale cleaner, no <code>cluster upgrade</code> mutation, no MCP. Reframed as <strong>"live status board, not autopilot"</strong>. Same review collapsed the 4-tier refresh cadence (200 ms / 5 s / 30 s / 5 m) to two tiers, dropped the cold-start snapshot cache as theatre, picked <em>hardcoded</em> over the "plugin-ready" check registry seam, and cut vendor playbooks for hardware not in the lab.</p>
+</div>
+
+<div class="card review">
+<h3>Security review — TOFU, BMC scoping, and tailnet spoofing</h3>
+<p>Made the image-cache two-phase commit explicit: temp file → atomic rename → digest record + <code>fsync</code> in the <em>same</em> critical section. Removed the resume-from-<code>*.part</code> heuristic (would introduce a TOCTOU between byte-count and hash). Scoped BMC pre-flight strictly to the configured host (no <code>/24</code> walking — that's a LAN-scanning fingerprint) with token-bucket rate-limiting. <strong>Killed Stream B4</strong> (Tailscale device cleanup) for v0.3: the OAuth-backed DELETE path is exploitable for tailnet spoofing if an attacker can force a delete of a still-trusted device. v0.4 ships <code>nostos cluster cleanup</code> with explicit allow-listing + two-keystroke confirm.</p>
+</div>
+
+<div class="card review">
+<h3>UX review — five states, contextual footer, capital chords</h3>
+<p>Three aggregate states became five: explicit <code>UNCONFIGURED</code> with a 4-step CTA (never green on a zero-node config) and explicit <code>TRANSITIONING</code> (a single offline worker mid-reflash should not read as <code>BROKEN</code>). Symbols are colorblind-safe (<code>✓ ⚠ ✗ ?</code> + bracket variants under <code>NO_COLOR=1</code>). Capital <kbd>H</kbd>/<kbd>G</kbd> avoid collision with potential lower-case actions. Footer is contextual by selected row type. <kbd>?</kbd> help is curated prose, decoupled from <code>nostos schema</code> output.</p>
+</div>
+
+<div class="card review">
+<h3>Tests review — <code>--dry-run</code> contract and exit-code 8 collision</h3>
+<p>Tightened <code>--dry-run</code> to a <em>property</em>: zero subprocess invocations, JSON output contains <code>would_execute: [...]</code>, and re-running without <code>--dry-run</code> produces an execution sequence that is a (sub)sequence of <code>would_execute</code>. Exit code on dry-run is <code>0</code> with payload <code>status:"preview"</code> — no dedicated dry-run exit code. Eliminated the v0.2 review's <code>exit-code 8</code> collision by collapsing the catalogue to six entries in the <code>10–15</code> range and pushing sub-causes (BMC unreachable vs auth vs version, digest mismatch vs unpinned) into <code>details.code</code>. Added the missing-kubeconfig and empty-cluster behaviours as explicit, documented, tested branches rather than silent skips.</p>
+</div>
+
+<h2 id="roadmap">11. Roadmap — v0.4 and beyond</h2>
+
+<h3>11.1 v0.4 (next)</h3>
+<ul class="tight">
+<li><strong>Dashboard action dispatch</strong> — <kbd>r</kbd> reinstall, <kbd>d</kbd> delete, <kbd>i</kbd> identify (Redfish chassis-LED → NIC packet flood → tpi UART, in that order — most visually unambiguous first).</li>
+<li><strong>Guided-fix dispatcher</strong> — capital <kbd>G</kbd> moves from "open the guide section" to "execute the recommended remediation" with a two-keystroke confirm.</li>
+<li><strong>Stream B4 — <code>nostos cluster cleanup</code></strong> — Tailscale offline device pruning behind explicit allow-listing + tagged-namespace + two-keystroke confirm.</li>
+<li><strong>Stream C8 — MCP server</strong> — JSON-RPC 2.0 over stdio, one tool per cobra command, schema derived from the v0.3 schema registry.</li>
+<li><strong><code>cluster upgrade --to &lt;ver&gt;</code></strong> — mutation behind the same dispatch seam (v0.3 ships preview only).</li>
+<li><strong><code>secrets rotate</code></strong> — Tailscale authkey rotation.</li>
+<li><strong><code>nostos doctor</code></strong> — pre-flight all the things; sibling to <code>secrets test</code>.</li>
+<li><strong>Operator-guide §5/§6</strong> — per-vendor playbooks (<code>generic-amd64</code>, <code>raspberry-pi-5</code>) + Tailscale OAuth deep-dive.</li>
+</ul>
+
+<h3>11.2 v0.5+ deferred</h3>
+<ul class="tight">
+<li>Plugin / pluggable check registry (v0.4 first redesigns with concrete use cases).</li>
+<li>JSONL run log + <code>--resume</code> for interrupted installs.</li>
+<li><code>inventory.db</code> (SQLite) for historical state.</li>
+<li>Drift detection + <code>nostos diff &lt;node&gt;</code>.</li>
+<li>New provisioners: <code>redfish</code>, <code>proxmox</code>, <code>usb</code>, <code>rpi-imager</code> — each on its own openspec change.</li>
+</ul>
+
+<h3>11.3 v1.0 (unchanged from v0.2 plan)</h3>
+<ul class="tight">
+<li>Stable CLI surface (no breaking changes).</li>
+<li>Vendored iPXE binary.</li>
+<li>Homebrew + container distribution.</li>
+<li>Hardware test matrix (6+ vendor playbooks).</li>
+<li>Man pages.</li>
+</ul>
+
+<h2 id="files">12. File locations appendix</h2>
+<p>Where to find every artefact referenced in this document. Paths are relative to the <code>home-systems</code> repo root unless prefixed with <code>~</code>.</p>
+
+<pre><code>home-systems/
+├── nostos/                                ← OPERATOR DATA (committed except state/)
+│   ├── config.yaml                        ← cluster + node registry
+│   ├── templates/                         ← per-node Talos machineconfig templates
+│   │   ├── dell01.yaml
+│   │   ├── tp1.yaml
+│   │   └── tp4.yaml
+│   └── state/                             ← cache; gitignored; rebuildable
+│       ├── assets/                        ← Talos kernel/initramfs/iPXE per version+arch
+│       ├── cache/                         ← image cache + digests.json (TOFU)
+│       ├── configs/                       ← rendered &lt;mac&gt;.yaml files (SECRETS!)
+│       ├── kubeconfig
+│       ├── talosconfig
+│       └── logs/
+├── .submodules/nostos/                    ← THE TOOL (git submodule; do not edit ad hoc)
+│   ├── cmd/nostos/
+│   ├── internal/cli/                      ← cobra + jsonio + errs + schema + dryrun + inputx
+│   ├── internal/cluster/                  ← orchestrator (PXE+TPI lifecycle)
+│   ├── internal/provisioner/              ← interface + pxe + tpi providers
+│   ├── internal/discovery/      NEW v0.3
+│   ├── internal/dashboard/      NEW v0.3  ← Bubble Tea v2 model + actions + embedded playbooks
+│   ├── internal/secrets/
+│   ├── internal/mcp/            v0.4
+│   └── AGENTS.md                NEW v0.3  ← invariants for AI/CLI callers
+├── .bin/
+│   └── nostos                             ← cached binary (rebuilt on demand)
+├── docs/
+│   ├── nostos-guide.md          NEW v0.3  ← operator guide (1484 lines)
+│   ├── talos.md                           ← Talos-specific notes
+│   └── …
+├── openspec/changes/
+│   ├── nostos-v01/                        ← original spec
+│   ├── nostos-v02-provisioners/           ← Provisioner abstraction
+│   └── nostos-v03-dashboard-and-hygiene/  ← THIS RELEASE
+└── ~/.cache/nostos/
+    └── upstream-versions.json             ← 24 h dashboard cache (slow tier)
+</code></pre>
+
+<h3>12.1 Quick links</h3>
+<ul class="tight">
+<li>Proposal: <span class="path">openspec/changes/nostos-v03-dashboard-and-hygiene/proposal.md</span></li>
+<li>Design notes: <span class="path">openspec/changes/nostos-v03-dashboard-and-hygiene/design.md</span></li>
+<li>Tasks: <span class="path">openspec/changes/nostos-v03-dashboard-and-hygiene/tasks.md</span></li>
+<li>Specs: <span class="path">openspec/changes/nostos-v03-dashboard-and-hygiene/specs/dashboard/spec.md</span> + <span class="path">…/specs/cli-machine-output/spec.md</span></li>
+<li>Review synthesis: <span class="path">v0.3/synthesis.md</span></li>
+<li>Operator guide: <span class="path">docs/nostos-guide.md</span></li>
+<li>Agent invariants: <span class="path">.submodules/nostos/AGENTS.md</span></li>
+<li>v0.2 companion document: <a href="nostos-v02.html">nostos-v02.html</a></li>
+</ul>
+
+<hr>
+<p class="note">Generated 2026-05-25 against the v0.3 OpenSpec change at <code>nostos-v03-dashboard-and-hygiene/</code>. Single-file, inline CSS, no external dependencies. Print stylesheet hides the TOC and inverts the theme for paper.</p>
+
+</main>
+</div>
+</body>
+</html>

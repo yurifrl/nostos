@@ -1,0 +1,1053 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>nostos v0.2 — Provisioner Architecture &amp; Session Log</title>
+<style>
+:root{--bg:#0f1216;--bg-elev:#161a21;--bg-elev2:#1c222b;--fg:#e6e6e6;--fg-mute:#a8b0bd;--accent:#7aa2f7;--accent-2:#bb9af7;--ok:#9ece6a;--warn:#e0af68;--err:#f7768e;--code-bg:#11151c;--code-fg:#cfd8e3;--rule:#262d38}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;background:var(--bg);color:var(--fg);font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+a{color:var(--accent);text-decoration:none}
+a:hover{text-decoration:underline}
+code,pre,kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:13.5px}
+code{background:var(--code-bg);color:var(--code-fg);padding:1px 6px;border-radius:4px;border:1px solid var(--rule)}
+pre{background:var(--code-bg);color:var(--code-fg);padding:14px 16px;border-radius:8px;border:1px solid var(--rule);overflow-x:auto;line-height:1.5;white-space:pre}
+pre code{background:none;border:0;padding:0}
+h1,h2,h3,h4{color:#fff;line-height:1.25}
+h1{font-size:2rem;margin:0 0 .5rem 0}
+h2{font-size:1.5rem;margin:2.4rem 0 .8rem;border-bottom:1px solid var(--rule);padding-bottom:.4rem;color:var(--accent)}
+h3{font-size:1.15rem;margin:1.6rem 0 .5rem;color:var(--accent-2)}
+h4{font-size:1rem;margin:1.1rem 0 .3rem;color:#dfe7f5}
+hr{border:0;border-top:1px solid var(--rule);margin:2rem 0}
+.layout{display:grid;grid-template-columns:260px 1fr;gap:32px;max-width:1280px;margin:0 auto;padding:24px}
+.toc{position:sticky;top:24px;align-self:start;max-height:calc(100vh - 48px);overflow-y:auto;background:var(--bg-elev);border:1px solid var(--rule);border-radius:10px;padding:14px 16px}
+.toc h4{margin-top:0;color:var(--fg-mute);font-size:.78rem;text-transform:uppercase;letter-spacing:.06em}
+.toc ol{margin:0;padding-left:18px}
+.toc li{margin:.25rem 0;font-size:.92rem}
+.content{min-width:0;max-width:1100px}
+.titlebar{background:linear-gradient(135deg,#1a1f2b,#1c2433);border:1px solid var(--rule);padding:22px 24px;border-radius:12px;margin-bottom:18px}
+.titlebar .meta{color:var(--fg-mute);font-size:.92rem;margin-top:.4rem}
+.lede{color:var(--fg-mute);font-size:1.02rem}
+.card{background:var(--bg-elev);border:1px solid var(--rule);border-radius:10px;padding:16px 18px;margin:14px 0}
+.card h3,.card h4{margin-top:0}
+.card.bug{border-left:3px solid var(--err)}
+.card.fixed{border-left:3px solid var(--ok)}
+.card.decision{border-left:3px solid var(--accent)}
+.card.cli{border-left:3px solid var(--accent-2)}
+.tag{display:inline-block;font-size:.72rem;letter-spacing:.04em;text-transform:uppercase;padding:1px 8px;border-radius:999px;border:1px solid var(--rule);color:var(--fg-mute);margin-left:6px;vertical-align:middle}
+.tag.ok{color:var(--ok);border-color:#2c4a25}
+.tag.warn{color:var(--warn);border-color:#5a4322}
+.tag.err{color:var(--err);border-color:#5a2630}
+.tag.def{color:var(--accent);border-color:#27395c}
+table{border-collapse:collapse;width:100%;margin:.6rem 0;font-size:.94rem}
+th,td{border:1px solid var(--rule);padding:6px 10px;text-align:left;vertical-align:top}
+th{background:var(--bg-elev2);color:#fff}
+.path{color:var(--accent);background:#0c1320;border:1px solid #21314f;padding:1px 6px;border-radius:4px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:13.5px}
+.timeline{border-left:2px solid var(--rule);padding-left:18px;margin-left:6px}
+.timeline .step{margin:14px 0;position:relative}
+.timeline .step::before{content:"";position:absolute;left:-24px;top:.55em;width:10px;height:10px;border-radius:50%;background:var(--accent)}
+.timeline .step.err::before{background:var(--err)}
+.timeline .step.ok::before{background:var(--ok)}
+.timeline .step.warn::before{background:var(--warn)}
+.timeline .step h4{margin:.1rem 0 .3rem 0}
+ul.tight,ol.tight{margin:.3rem 0 .3rem 1.2rem}
+ul.tight li,ol.tight li{margin:.15rem 0}
+.note{border:1px dashed var(--rule);background:#141923;padding:10px 14px;border-radius:8px;color:var(--fg-mute);font-size:.93rem;margin:10px 0}
+.tag-row{display:flex;flex-wrap:wrap;gap:6px;margin:.4rem 0}
+.kvtable td:first-child{color:var(--fg-mute);width:30%}
+@media (max-width:900px){.layout{grid-template-columns:1fr}.toc{position:static;max-height:none}}
+@media print{.toc{display:none}.layout{display:block;max-width:none;padding:0}body{background:#fff;color:#000}a{color:#003;text-decoration:underline}pre,code{background:#f4f4f4;color:#000;border-color:#bbb}.card{border-color:#bbb;background:#fafafa}}
+</style>
+</head>
+<body>
+<div class="layout">
+<aside class="toc" aria-label="Table of contents">
+<h4>nostos v0.2</h4>
+<ol>
+<li><a href="#summary">1. Executive summary</a></li>
+<li><a href="#timeline">2. Run timeline</a></li>
+<li><a href="#arch">3. Architecture walkthrough</a></li>
+<li><a href="#decisions">4. Architecture decisions</a></li>
+<li><a href="#cli">5. CLI reference</a></li>
+<li><a href="#config">6. Configuration reference</a></li>
+<li><a href="#templates">7. Per-node templates</a></li>
+<li><a href="#diagram">8. Live state diagram</a></li>
+<li><a href="#bugs">9. Bugs found</a></li>
+<li><a href="#roadmap">10. Roadmap</a></li>
+<li><a href="#tests">11. Test inventory</a></li>
+<li><a href="#reviews">12. Parallel reviews</a></li>
+</ol>
+</aside>
+<main class="content">
+<section class="titlebar" id="summary">
+<h1>nostos v0.2 — Provisioner Architecture &amp; Session Log</h1>
+<div class="meta">Session-grade reference. Sources cited inline. Generated 2026-05-25.</div>
+<p class="lede" style="margin-top:14px">nostos v0.1 shipped a single boot method (PXE, x86-only). v0.2 introduces a <strong>Provisioner</strong> abstraction so that the same command — <code>nostos node install &lt;name&gt;</code> — drives any boot method: PXE for the Dell controlplane, BMC flashing for Turing Pi RK1 modules, and (in v0.3+) Redfish, Proxmox, USB, rpi-imager. The session captured here ends with <strong>dell01, tp1, and tp4 all Ready in the Kubernetes cluster and joined to Tailscale</strong>, with rendered machineconfigs minted with fresh OAuth-derived authkeys per render and the legacy <code>taskfiles/turing.yml</code> flow retired.</p>
+<div class="tag-row">
+<span class="tag def">Boot methods: pxe, tpi</span>
+<span class="tag ok">3/3 nodes Ready</span>
+<span class="tag ok">89 unit tests / 18 packages</span>
+<span class="tag warn">PR not merged at write time</span>
+</div>
+</section>
+<p>This document is exhaustive on purpose. The user explicitly asked for thoroughness on every architecture decision and every CLI use case. Source citations point at specific files in <code>.submodules/nostos/</code> and <code>openspec/changes/nostos-v02-provisioners/</code>. Items in the design that did not ship are explicitly marked <span class="tag warn">DEFERRED v0.3</span> or later.</p>
+<h2 id="timeline">2. Real-world run timeline</h2>
+<p>Each step lists the command, the observed outcome, and what changed (code, config, or 1Password) to unblock it. The full lifecycle: started with <code>nostos node install tp4</code> failing on a missing image digest pin and ended with three nodes Ready on the cluster.</p>
+<div class="timeline">
+
+<div class="step err">
+<h4>Step 1 — First attempt: <code>nostos node install tp4</code></h4>
+<pre><code>$ go run ./.submodules/nostos/cmd/nostos node install tp4
+About to install tp4 (method=tpi). Pass --yes to skip prompt.
+✗ provisioner: preflight failed: tpi: no image_digest pinned for
+  3616c4c8.../v1.10.3/arm64; refusing to fetch on first run</code></pre>
+<p>The original v0.2 spec required strict pinning: see <code>openspec/changes/nostos-v02-provisioners/specs/tpi-provisioning/spec.md</code>, scenario “Missing digest fails closed.” No <code>cluster.image_digests</code> entry meant Preflight refused to download.</p>
+</div>
+
+<div class="step warn">
+<h4>Step 2 — Trade strict pinning for TOFU</h4>
+<p>Strict-pin forced the operator to manually SHA-256 the factory image before the first install. Relaxed to <strong>TOFU</strong> (trust-on-first-use): when no digest is pinned, the first download is recorded into <code>~/.cache/nostos/digests.json</code>; subsequent runs verify against that recorded value. A Preflight WARN tells the operator they are in TOFU mode.</p>
+<p>Code: <span class="path">internal/provisioner/tpi/tpi.go</span> (<code>Preflight</code>) and <span class="path">internal/provisioner/tpi/image_cache.go</span> (<code>imageCache.Ensure</code>, <code>readRecordedDigest</code>, <code>writeRecordedDigest</code>).</p>
+<pre><code>$ nostos node install tp4
+→ tpi preflight: TCP turingpi.local:443 ok
+⚠ no image_digest pinned for 3616.../v1.10.3/arm64; trusting TLS
+   to factory.talos.dev (TOFU)
+→ fetching Talos image
+▼ downloading metal-arm64.raw.xz (123 MiB)
+→ recorded sha256:e3b0c44... for 3616.../v1.10.3/arm64</code></pre>
+</div>
+
+<div class="step err">
+<h4>Step 3 — “Device not configured” from <code>tpi flash</code></h4>
+<pre><code>✗ tpi flash: exit status 1: stderr: open /dev/...: device not configured</code></pre>
+<p>Misleading error from the <code>tpi</code> CLI. Real cause: BMC required HTTP-basic auth. The provider read <code>TPI_USERNAME</code> / <code>TPI_PASSWORD</code> from the child env but the 1Password fields were empty. Filed as <a href="#bug6">Bug #6</a>.</p>
+</div>
+
+<div class="step ok">
+<h4>Step 4 — BMC creds added in 1Password</h4>
+<p>Created <code>op://kubernetes/home-systems/TURING_BMC_USERNAME</code> and <code>TURING_BMC_PASSWORD</code> in 1Password, referenced from <code>nostos/config.yaml</code>:</p>
+<pre><code>tp4:
+  boot:
+    method: tpi
+    tpi:
+      host: turingpi.local
+      slot: 4
+      username_ref: op://kubernetes/home-systems/TURING_BMC_USERNAME
+      password_ref: op://kubernetes/home-systems/TURING_BMC_PASSWORD</code></pre>
+<p>Rerun output (preflight → fetch → flash):</p>
+<pre><code>$ nostos node install tp4
+→ tpi preflight ok
+→ image ready: ~/.cache/nostos/images/3616.../v1.10.3/metal-arm64.raw
+→ tpi power off -n 4 ... (already off; non-fatal)
+→ tpi flash -i metal-arm64.raw -n 4
+  Writing 1.8 GiB ........................ 100%
+→ tpi power on -n 4</code></pre>
+<p>The resolved password is set via <code>Cmd.Env</code> only; argv contains exclusively non-secret paths and flags. See <code>Boot</code> in <span class="path">internal/provisioner/tpi/tpi.go</span>.</p>
+</div>
+
+<div class="step err">
+<h4>Step 5 — UART shows old kernel after flash</h4>
+<p><code>tpi uart -n 4</code> reported the same kernel version as before the flash. Talos was apparently not booting from the freshly written eMMC.</p>
+<p>Root cause: the cluster default schematic (<code>4a0d65c6...</code>, used for the Dell amd64 controlplane) did <strong>not</strong> include the <code>siderolabs/sbc-rockchip</code> overlay. Without it the arm64 metal image lacks the Rockchip device-tree bits required to boot RK3588.</p>
+</div>
+
+<div class="step ok">
+<h4>Step 6 — Per-node <code>schematic_id</code> override</h4>
+<p>Added <code>SchematicID</code> as a per-node override and an <code>EffectiveSchematic(cluster)</code> helper. <code>tpi.Prepare</code> calls it when computing image URL + digest key. See <span class="path">internal/config/config.go</span> (<code>Node.SchematicID</code>, <code>Node.EffectiveSchematic</code>).</p>
+<pre><code>tp1:
+  arch: arm64
+  schematic_id: 3616c4c824f2540c0a14da0cc8e6fc46143f2ca0cc75c9c6376a66e562894950
+  boot:
+    method: tpi
+    tpi: { host: turingpi.local, slot: 1, ... }</code></pre>
+<p>With the rockchip-overlay schematic, the next flash booted to maintenance mode.</p>
+</div>
+
+<div class="step err">
+<h4>Step 7 — <code>WaitMaintenance</code> timeout (<a href="#bug1">Bug #1</a>)</h4>
+<pre><code>✗ provisioner: timeout: tpi wait maintenance: context deadline exceeded</code></pre>
+<p>Default <code>WaitMaintenanceDeadline</code> was 10 minutes. RK1 cold-boot from flash to apid-on-50000 was clocking &gt;14 minutes on this lab. The orchestrator gave up while the node was still booting. (Now defaulted to 20 min, see <code>InstallOpts.withDefaults</code> in <span class="path">internal/cluster/orchestrate.go</span>.)</p>
+</div>
+
+<div class="step warn">
+<h4>Step 8 — Manual <code>talosctl apply-config --insecure</code> as workaround</h4>
+<pre><code>$ talosctl --insecure -n 192.168.68.114 apply-config \
+    --file nostos/state/configs/tp4.yaml</code></pre>
+<p>Worked because Step 9 had landed the <code>fname=name</code> fix to <code>registry.Render</code>. Until that fix, the rendered file landed at <code>configs/.yaml</code>.</p>
+</div>
+
+<div class="step fixed">
+<h4>Step 9 — Empty filename for tpi nodes (<a href="#bug2">Bug #2</a>) FIXED</h4>
+<p><code>registry.Render</code> derived the filename from <code>node.MACHyphen()</code>. tpi nodes have no MAC — their network is the BMC — so MACHyphen returned <code>""</code>, and two tpi nodes overwrote each other on disk at <code>nostos/state/configs/.yaml</code>.</p>
+<p>Fix in this session, <span class="path">internal/registry/registry.go</span>:</p>
+<pre><code>fname := node.MACHyphen()
+if fname == "" {
+    fname = name   // fall back to node name for tpi/non-PXE nodes
+}
+out := p.Configs() + "/" + fname + ".yaml"</code></pre>
+</div>
+
+<div class="step err">
+<h4>Step 10 — ext-tailscale crash loop after install</h4>
+<pre><code>$ kubectl -n kube-system logs ext-tailscale-tp1 -p
+panic: tailscale: authkey rejected (used or expired)</code></pre>
+<p>The <code>op://kubernetes/talos/TAILSCALE_AUTH_KEY</code> ref pointed at a static authkey that had been consumed by a previous install. Each fresh install re-rendered the same dead key into the machineconfig and the Talos extension entered <code>CrashLoopBackOff</code>.</p>
+</div>
+
+<div class="step ok">
+<h4>Step 11 — Tailscale OAuth-mint backend</h4>
+<p>Replaced the static authkey ref with a new <code>tailscale://authkey</code> URI scheme backed by Tailscale's OAuth client_credentials grant. Each render mints a <strong>fresh, single-use, ephemeral, preauthorized</strong> auth key via <code>POST /api/v2/tailnet/-/keys</code> and embeds it into the machineconfig.</p>
+<p>Code lives in <span class="path">internal/secrets/tailscale.go</span> (<code>TailscaleBackend</code>, <code>fetchAccessToken</code>, <code>mintKey</code>, <code>ListKeys</code>, <code>RevokeKey</code>). Wired into the secrets registry in <span class="path">internal/secrets/factory.go</span> when <code>secrets.tailscale</code> is configured.</p>
+<pre><code>secrets:
+  tailscale:
+    oauth_client_id_ref:     op://kubernetes/talos/tailscale-oauth-client-id
+    oauth_client_secret_ref: op://kubernetes/talos/tailscale-oauth-client-secret
+    tags: [tag:k8s]
+    expiry: 7776000
+    preauthorized: true
+    description: nostos</code></pre>
+<p>Templates reference it as a URI, not a literal:</p>
+<pre><code>extensions:
+  tailscale:
+    authKey: tailscale://authkey</code></pre>
+</div>
+
+<div class="step warn">
+<h4>Step 12 — Tailscale ACL update for <code>tag:k8s</code></h4>
+<p>Minting a key with capability <code>tags: [tag:k8s]</code> requires the OAuth client to be permitted to issue keys carrying that tag. Updated the tailnet ACL <code>tagOwners</code> stanza accordingly. Verification: <code>nostos secrets test tailscale</code> mints + revokes a probe key successfully.</p>
+</div>
+
+<div class="step ok">
+<h4>Step 13 — Final state</h4>
+<pre><code>$ kubectl get nodes
+NAME     STATUS   ROLES           AGE     VERSION
+dell01   Ready    control-plane   3d      v1.32.1
+tp1      Ready    &lt;none&gt;          17m     v1.32.1
+tp4      Ready    &lt;none&gt;          24m     v1.32.1
+
+$ tailscale status | grep -E 'dell01|tp[14]'
+100.x.x.10   dell01   tagged-devices  linux  -
+100.x.x.11   tp1      tagged-devices  linux  -
+100.x.x.12   tp4      tagged-devices  linux  -</code></pre>
+<p>3 nodes Ready in K8s. 3 on the tailnet. <code>taskfiles/turing.yml</code> RK1 flow retired.</p>
+</div>
+
+</div>
+<h2 id="arch">3. Architecture walkthrough</h2>
+<p>v0.2 lands eight new packages, refactors three existing ones, and threads a single set of seams (Commander, Clock, Secrets) through every provider. This section walks each package: what it does, where it lives, why it exists (citing <code>design.md</code> decisions D1–D5), and how it composes with the rest.</p>
+
+<h3>3.1 <code>internal/provisioner/</code> — the interface and the registry</h3>
+<p>File: <span class="path">.submodules/nostos/internal/provisioner/provisioner.go</span> (~125 lines).</p>
+<p>Defines four exported types and one registry:</p>
+<ul class="tight">
+<li><code>Phase</code> — enum string. Constants: <code>preflight</code>, <code>prepare</code>, <code>boot</code>, <code>wait</code>, <code>apply</code>, <code>bootstrap</code>, <code>ready</code>, <code>error</code>, <code>cleanup</code>. The orchestrator emits a phase marker on transition; events carry phase, kind, message, and a clock-supplied timestamp.</li>
+<li><code>Event{Phase, Kind, Message, At}</code> — superseded the v0.1 free-form <code>(kind, message)</code> tuple after critic 2.1 pointed out the run-log scenario was unsatisfiable without phase. <code>EventEmitter</code> is a function alias <code>func(Event)</code>.</li>
+<li><code>Provisioner</code> interface — the seven methods listed below. <code>Method()</code> + <code>ContentionKey()</code> are pure; the five lifecycle hooks are <code>(ctx, *config.Node, EventEmitter) error</code> (with <code>Apply</code> additionally taking <code>configPath</code>).</li>
+<li><code>Deps{Cfg, Paths, Secrets, Cmd, Clock}</code> — the bag of seams every provider receives at construction time. <code>Cmd</code> is the subprocess seam (<code>execx.Commander</code>); <code>Clock</code> is the time seam (<code>clockx.Clock</code>); <code>Secrets</code> is a marker interface widened in v0.3.</li>
+<li>Registry: package globals <code>regMu</code>, <code>registry map[string]Factory</code>, plus <code>Register(method, Factory)</code>, <code>New(method, Deps) (Provisioner, error)</code>, <code>Methods()</code>. <code>Register</code> panics on empty/duplicate; <code>New</code> returns <code>ErrNotRegistered</code> for unknown methods.</li>
+</ul>
+<p>Why: design D1. The interface decouples “how does this hardware reach Talos maintenance mode” from the orchestrator. Adding redfish/proxmox/usb/rpi-imager in later releases is purely a matter of importing a new package whose <code>init()</code> calls <code>provisioner.Register</code>. <code>cmd/nostos/main.go</code> blank-imports providers it ships.</p>
+
+<h4>The Provisioner contract (verbatim from <span class="path">provisioner.go</span>)</h4>
+<pre><code>type Provisioner interface {
+    Method() string
+    ContentionKey(node *config.Node) string
+
+    Preflight(ctx, node, emit) error
+    Prepare(ctx, node, emit) error
+    Boot(ctx, node, emit) error
+    WaitMaintenance(ctx, node, emit) error
+    Apply(ctx, node, configPath string, emit) error
+    Cleanup(ctx, node, emit) error
+}</code></pre>
+<p>Hook idempotency contract (from glossary in <code>design.md</code>):</p>
+<table class="kvtable">
+<tr><td><code>Preflight</code></td><td>No observable side effect. Safe to re-run.</td></tr>
+<tr><td><code>Prepare</code></td><td>Converges to same on-disk state. Cache hits short-circuit.</td></tr>
+<tr><td><code>Boot</code></td><td>NOT idempotent: <code>tpi flash</code> is destructive every run. Re-entry guarded by per-node flock + live-node reinstall guard.</td></tr>
+<tr><td><code>WaitMaintenance</code></td><td>Pure poll. Safe to re-run.</td></tr>
+<tr><td><code>Apply</code></td><td>Provider-documented. PXE no-op trivially safe; tpi <code>apply-config -i</code> succeeds once per maintenance window.</td></tr>
+<tr><td><code>Cleanup</code></td><td>Idempotent. Safe to call twice.</td></tr>
+</table>
+
+<h3>3.2 <code>internal/provisioner/errors.go</code> — sentinel errors</h3>
+<p>File: <span class="path">internal/provisioner/errors.go</span>. Six sentinel errors, all matched via <code>errors.Is</code>:</p>
+<table>
+<tr><th>Sentinel</th><th>Returned when</th></tr>
+<tr><td><code>ErrPreflight</code></td><td>Any Preflight failure that should abort before side effects.</td></tr>
+<tr><td><code>ErrBoot</code></td><td>Boot-phase failure (e.g. <code>tpi flash</code> non-zero exit).</td></tr>
+<tr><td><code>ErrTimeout</code></td><td>A hook's deadline expired.</td></tr>
+<tr><td><code>ErrLocked</code></td><td>Per-node flock contended (<code>EWOULDBLOCK</code>).</td></tr>
+<tr><td><code>ErrNodeAlreadyReady</code></td><td>Live-node reinstall guard: target node is healthy and <code>--reinstall</code> was not passed.</td></tr>
+<tr><td><code>ErrNotRegistered</code></td><td>Unknown method passed to <code>provisioner.New</code>.</td></tr>
+</table>
+
+<h3>3.3 <code>internal/provisioner/pxe/</code> — rehomed PXE flow</h3>
+<p>File: <span class="path">internal/provisioner/pxe/pxe.go</span> (~245 lines).</p>
+<p>Wraps the v0.1 <code>internal/pxe/</code> server behind the new interface. Behavior preserved bit-for-bit for dell01.</p>
+<ul class="tight">
+<li><code>Method() = "pxe"</code>; <code>ContentionKey(_) = "pxe:server"</code> (only one dnsmasq+:9080 binding can exist).</li>
+<li><code>Preflight</code> calls <code>pxe.NewServer(p.deps.Paths).Preflight()</code> — detects ethernet interface, port :9080 free, dnsmasq binary present.</li>
+<li><code>Prepare</code> queues a one-shot wipe (<code>cluster.QueueWipe</code> against <code>pending-wipes.json</code>) unless <code>SkipWipe</code> is set, builds PXE assets via <code>pxeserver.BuildAll</code>, and re-renders <code>boot.ipxe</code> with <code>talos.experimental.wipe=system</code> when wipe is active.</li>
+<li><code>Boot</code> calls <code>srv.Start(serveCtx, ni)</code> against a context the provider owns (cancelled in Cleanup), then spawns the HTTP-request tap goroutine that emits <code>download</code> events for kernel/initramfs and <code>config-fetched</code> when Talos pulls its rendered machineconfig.</li>
+<li><code>WaitMaintenance</code> waits for either ctx-done or the tap goroutine ending; PXE delivers the config in-band so this is effectively a wait-for-tap rather than a poll.</li>
+<li><code>Apply</code> is a <strong>no-op</strong>. The orchestrator never invokes <code>talosctl apply-config -i</code> for PXE because the iPXE chain already delivered the config. This was the single biggest correction from the critic review (D2 / critic 3.2): symmetry-for-its-own-sake would have caused a double-apply race.</li>
+<li><code>Cleanup</code> stops the server, joins the tap goroutine (2-second deadline), consumes the wipe queue on success, and re-renders <code>boot.ipxe</code> back to a clean (no-wipe) form.</li>
+<li>Exposes <code>SetSkipWipe(bool)</code> and <code>SetServeTimeout(d)</code> setters honored by the orchestrator via type-assertion (<code>InstallOpts.SkipWipe</code> / <code>ServeTimeout</code>).</li>
+</ul>
+<p>Why: design D3 “pxe (refactor only).” The dell01 install must produce the same observable event-Kind subsequence as v0.1 — asserted by a topological subsequence test, not a byte-equal golden.</p>
+
+<h3>3.4 <code>internal/provisioner/tpi/</code> — Turing Pi BMC provider</h3>
+<p>File: <span class="path">internal/provisioner/tpi/tpi.go</span> (~360 lines). Image cache split into <span class="path">image_cache.go</span> (~210 lines).</p>
+<p>Replaces <code>taskfiles/turing.yml</code> end to end. Highlights:</p>
+<ul class="tight">
+<li><code>Method() = "tpi"</code>; <code>ContentionKey(node) = "tpi:&lt;host&gt;"</code> — every slot on a Turing Pi shares one BMC.</li>
+<li><code>Preflight</code> verifies: <code>tpi --version</code> &ge; <code>1.0.0</code> (regex-parsed), TCP <code>host:443</code> connect within 2s (mockable via <code>dialTimeout</code> seam), every credential <code>_ref</code> resolves through the secrets backend, and (TOFU branch) emits a WARN if no digest is pinned for this <code>(schematic, version, arch)</code>.</li>
+<li><code>Prepare</code> hands off to <code>imageCache.Ensure</code> (next subsection) and returns the path to the decompressed <code>.raw</code>.</li>
+<li><code>Boot</code> materializes the optional identity-file ref to a 0600 file inside a 0700 per-run dir at <code>~/.cache/nostos/secrets/&lt;run-id&gt;/tpi-key</code> (with <code>O_CREAT|O_EXCL</code> and an <code>lstat</code>-based symlink refusal), populates <code>TPI_USERNAME</code>/<code>TPI_PASSWORD</code> on the child env, and runs three subprocesses through <code>p.deps.Cmd</code>: <code>tpi --host &lt;h&gt; power off -n &lt;slot&gt;</code> (“already off” substring is non-fatal), <code>tpi --host &lt;h&gt; flash -i &lt;raw&gt; -n &lt;slot&gt;</code>, <code>tpi --host &lt;h&gt; power on -n &lt;slot&gt;</code>. Stdout passes through <code>runStream</code> + <code>coalesce</code> with a 200ms window before reaching <code>emit()</code>.</li>
+<li><code>WaitMaintenance</code> polls <code>talosctl --insecure -n &lt;ip&gt; version</code> every 5s using <code>p.deps.Clock.NewTimer</code>. Returns when the version response parses; returns <code>ErrTimeout</code> wrapping <code>ctx.Err()</code> on deadline.</li>
+<li><code>Apply</code> runs <code>talosctl apply-config -i -n &lt;ip&gt; --file &lt;configPath&gt;</code>. The path is the orchestrator's 0600 temp file under <code>~/.cache/nostos/secrets/&lt;run-id&gt;/</code>; the orchestrator unlinks it after <code>Apply</code> returns.</li>
+<li><code>Cleanup</code>: if <code>bootErr</code> is set, best-effort <code>tpi power off -n &lt;slot&gt;</code> with the fresh 60s context; always remove the materialized identity-file and the parent secrets dir.</li>
+</ul>
+
+<h3>3.5 <code>internal/provisioner/tpi/image_cache.go</code> — sha256-pinned + TOFU</h3>
+<ul class="tight">
+<li>Image URL: <code>https://factory.talos.dev/image/&lt;schematic&gt;/&lt;version&gt;/metal-&lt;arch&gt;.raw.xz</code>. Base URL is a package-level <code>var</code> so tests can swap in <code>httptest.Server</code>.</li>
+<li>Cache root: <code>~/.cache/nostos/images/&lt;schematic&gt;/&lt;version&gt;/</code> (mode 0700). Cache files mode 0600. <code>cacheDirFn</code> is a seam.</li>
+<li><code>imageCache.Ensure(ctx)</code>: on cache hit and digest match, returns the existing <code>.raw</code> path immediately. On cache miss or digest drift, deletes stale files, downloads to a <code>.part</code> sibling, sha256s it, atomic-renames to the canonical name, decompresses to <code>.raw</code> using <code>github.com/ulikunitz/xz</code> (Go-native, <strong>no shell-out</strong> per security §8).</li>
+<li>Pin source priority: (1) <code>cluster.image_digests["&lt;schematic&gt;/&lt;version&gt;/&lt;arch&gt;"]</code>; (2) recorded TOFU digest at <code>~/.cache/nostos/digests.json</code>; (3) on first run with neither, the observed digest is recorded post-download.</li>
+<li>Mismatch behavior: file unlinked, typed error returned with both expected and actual hashes. No retry in v0.2.</li>
+</ul>
+<p>Why: design D3 (“Image integrity”) and security §7. The original spec required strict pinning; relaxing to TOFU is a session-level decision (see <a href="#bug5">Bug #5</a> for the race window TOFU introduces).</p>
+
+<h3>3.6 <code>internal/provisioner/redact/</code> — secret scrubber</h3>
+<p>File: <span class="path">internal/provisioner/redact/scrubber.go</span>. Two exported APIs:</p>
+<ul class="tight">
+<li><code>Scrubber</code>: holds a slice of secret strings, sorted longest-first to make overlapping prefixes redact correctly. <code>AddAll([]string)</code>, <code>Scrub(string) string</code>. Marker is the literal <code>[REDACTED]</code>.</li>
+<li><code>WrapEmitter(EventEmitter, *Scrubber) EventEmitter</code> — returns a wrapped emitter whose every <code>Event.Message</code> passes through <code>Scrub</code>. <code>nil</code> next is replaced by a no-op; <code>nil</code> scrubber returns next unchanged.</li>
+</ul>
+<p>Why: security §6 and critic 1.2. Provider discretion is not part of the redaction story — the orchestrator wraps the emitter once with a Scrubber seeded with the resolved-secret table for the run; every provider emit and every captured child stdout/stderr passes through it.</p>
+
+<h3>3.7 <code>internal/provisioner/contention/</code> — keyed mutex</h3>
+<p>File: <span class="path">internal/provisioner/contention/map.go</span>. Implements an in-process keyed mutex:</p>
+<ul class="tight">
+<li><code>Map.Acquire(key) func()</code> blocks until the lock for <code>key</code> is held; returns a release closure (idempotent). Empty keys return a no-op release immediately.</li>
+<li>Internal <code>entry{mu, ref}</code> is refcounted so map keys are GC'd when the last release fires.</li>
+<li>Process-wide <code>contention.Default</code> + free-function <code>contention.Acquire(key)</code> for callers.</li>
+</ul>
+<p>Why: design D4. Two installs whose providers return the same non-empty key serialize at the Apply boundary; distinct keys parallelize. <code>tpi:&lt;host&gt;</code> serializes slots on a board; <code>pxe:server</code> serializes PXE-server installs; an empty key means “no contention.”</p>
+
+<h3>3.8 <code>internal/provisioner/flock/</code> — per-node OS file lock</h3>
+<p>File: <span class="path">internal/provisioner/flock/node.go</span>. Cross-process safety. Production callers use <code>AcquireNodeAt(p.Configs(), name)</code>:</p>
+<ul class="tight">
+<li>Opens <code>nostos/state/configs/&lt;name&gt;.lock</code> mode 0600.</li>
+<li>Calls <code>unix.Flock(fd, LOCK_EX|LOCK_NB)</code>.</li>
+<li>On <code>EWOULDBLOCK</code> returns <code>fmt.Errorf("%w: lockfile %s held by another process", ErrLocked, path)</code>.</li>
+<li>Release closure unlocks + closes; idempotent.</li>
+</ul>
+<p>Why: security §9 + design D5. Two <code>nostos node install &lt;name&gt;</code> invocations from the same workstation must not race the apply-config window. Cross-host concurrent operators are explicitly out of scope (documented as a gap).</p>
+
+<h3>3.9 <code>internal/provisioner/provisionertest/</code> — compliance suite</h3>
+<p>File: <span class="path">internal/provisioner/provisionertest/compliance.go</span>. Exposes <code>RunComplianceSuite(t, factory)</code>. Both the pxe and tpi providers wire it (<span class="path">pxe/compliance_test.go</span>, <span class="path">tpi/compliance_test.go</span>). Invariants:</p>
+<ul class="tight">
+<li><code>Method()</code> stable across calls and non-empty.</li>
+<li><code>ContentionKey()</code> pure (same input → same output).</li>
+<li><code>Cleanup</code> idempotent under a fresh <code>context.Background</code>.</li>
+</ul>
+<p>Why: tests review §1 + tasks 1.8. Land seams in PR #1 before any provider migration.</p>
+
+<h3>3.10 <code>internal/execx/</code> — Commander interface</h3>
+<p>File: <span class="path">internal/execx/commander.go</span>.</p>
+<pre><code>type Commander interface {
+    Run(ctx, name string, args, env []string,
+        stdin io.Reader, stdout, stderr io.Writer) error
+}
+type OSCommander struct{}
+func (OSCommander) Run(...) { exec.CommandContext(...).Run() }</code></pre>
+<p>Every provider's subprocess spawn goes through <code>p.deps.Cmd</code>. Tests inject a <code>FakeCommander</code> that records argv, env, stdin and serves scripted stdout/exit. Production wires <code>execx.OSCommander{}</code> in <code>cluster.Install</code>. Why: design D-Tests + tests §2. <code>grep -R 'exec\.Command' internal/provisioner</code> returns zero hits.</p>
+
+<h3>3.11 <code>internal/clockx/</code> — Clock interface</h3>
+<p>File: <span class="path">internal/clockx/clock.go</span>. <code>Clock{Now, Sleep, NewTimer}</code> + <code>Timer{C, Stop, Reset}</code> + <code>Real</code> implementation. Tests inject a <code>FakeClock</code> so deadline / coalescing tests are deterministic. Why: design D-Tests; <code>grep -R 'time\.Now\|time\.Sleep' internal/provisioner</code> hits only <code>emit*</code> helpers in the pxe provider where event timestamps need wall time — deliberately scoped.</p>
+
+<h3>3.12 <code>internal/secrets/tailscale.go</code> — OAuth-mint backend</h3>
+<p>File: <span class="path">internal/secrets/tailscale.go</span> (~430 lines). Implements the <code>tailscale://</code> URI scheme on the existing secrets backend interface.</p>
+<ul class="tight">
+<li><code>Scheme() = "tailscale"</code>. Only resource shape supported is <code>tailscale://authkey</code> with optional query overrides (<code>?tags=tag:k8s&amp;expiry=3600&amp;reusable=false&amp;ephemeral=true&amp;preauthorized=true&amp;description=...</code>).</li>
+<li><code>Validate()</code>: hits the OAuth token endpoint to confirm <code>client_id</code>+<code>client_secret</code> resolve and the <code>auth_keys</code> scope grants — without minting a key. Surfaced by <code>nostos secrets list</code> and <code>nostos secrets test</code>.</li>
+<li><code>Resolve(uri)</code>: mints a fresh key per call. The OAuth access token is fetched <strong>per Resolve</strong> (no caching) so the blast-radius of a leaked token is limited to one render. See <code>fetchAccessToken</code>.</li>
+<li><code>MintKey(ctx, opts)</code> / <code>ListKeys(ctx)</code> / <code>RevokeKey(ctx, id)</code> for CLI use cases (<code>secrets test</code>, <code>secrets keys list</code>, <code>secrets keys revoke</code>).</li>
+<li><code>redactToken(s)</code> scrubs anything matching <code>tskey-(auth|api|client)-...</code> from error messages so leaks via wrapped errors / <code>%v</code> are caught.</li>
+<li>Refs are resolved through a chained <code>RefResolverFunc</code> built in <code>secrets.BuildBackends</code>: the Tailscale backend never knows about <code>op://</code> / <code>file://</code> / <code>sops://</code> directly — it asks the resolver, the resolver dispatches by scheme.</li>
+</ul>
+
+<h3>3.13 <code>internal/cluster/orchestrate.go</code> — refactored Install pipeline</h3>
+<p>File: <span class="path">internal/cluster/orchestrate.go</span> (~280 lines). The post-refactor <code>Install</code> shape:</p>
+<pre><code>1.  acquire flock(p.Configs(), nodeName)            // ErrLocked if held
+2.  prov, _  = provisioner.New(method, deps)        // {pxe, tpi}
+3.  prov.Preflight(ctx, &amp;node, emit)
+4.  if !opts.Reinstall &amp;&amp; probeReady(node) {        // talosctl version
+        return ErrNodeAlreadyReady
+    }
+5.  configPath, cleanupTmp = renderToTemp(...)      // 0600 in 0700 dir
+6.  defer prov.Cleanup(freshCtx60s, &amp;node, emit)
+7.  release = contention.Acquire(prov.ContentionKey(&amp;node))
+8.  prov.Prepare(ctx, &amp;node, emit)
+9.  prov.Boot(ctx, &amp;node, emit)
+10. prov.WaitMaintenance(waitCtx, &amp;node, emit)      // ctx + deadline
+11. prov.Apply(ctx, &amp;node, configPath, emit)
+12. release()                                       // free contention
+13. probeApid loop                                  // 3 min
+14. if controlplane: Bootstrap + FetchKubeconfig
+15. emit Kind=ready</code></pre>
+<p>Notable contracts:</p>
+<ul class="tight">
+<li>The raw <code>events</code> channel is wrapped with <code>redact.WrapEmitter(bridge, scrub)</code> before any provider sees it. Provider emits flow through Scrubber.</li>
+<li><code>renderToTemp</code> renders the canonical config (preserving v0.1 layout) then copies into a fresh <code>nostos-secrets-XXXX</code> tempdir at mode 0700, file at 0600.</li>
+<li><code>runCleanup</code> derives its context from <code>context.Background</code> with a 60s timeout, surviving Ctrl-C of the run context.</li>
+<li><code>contention.Acquire</code> spans Boot–Apply with a guarded <code>releaseKeyOnce</code> closure that the deferred Cleanup also drops if it ran early.</li>
+</ul>
+
+<h3>3.14 <code>internal/config/config.go</code> — schema additions</h3>
+<p>File: <span class="path">internal/config/config.go</span>. Additions vs v0.1:</p>
+<ul class="tight">
+<li><code>Boot{Method string, TPI *TPIBoot}</code> on <code>Node</code>. Method enum: <code>{pxe, tpi}</code>. Default <code>pxe</code> when block omitted.</li>
+<li><code>TPIBoot{Host, Slot, UsernameRef, PasswordRef, IdentityFileRef}</code>.</li>
+<li><code>Ref</code> typed string with custom <code>UnmarshalYAML</code>. Allows <code>op://</code>, <code>sops://</code>, <code>file://</code>; explicitly rejects <code>env://</code> with a typed error; rejects everything else.</li>
+<li><code>Cluster.ImageDigests map[string]string</code> with key <code>&lt;schematic&gt;/&lt;version&gt;/&lt;arch&gt;</code>.</li>
+<li><code>Node.SchematicID</code> per-node override + <code>Node.EffectiveSchematic(cluster)</code> resolver.</li>
+<li><code>Secrets.Tailscale *TailscaleConfig</code>: optional block enabling the <code>tailscale://</code> scheme.</li>
+<li>Validator: <code>(host, slot)</code> uniqueness across all <code>tpi</code>-method nodes; PXE method requires MAC; tpi method does not (its network is the BMC).</li>
+</ul>
+
+<h3>3.15 <code>internal/cli/{node_install,secrets,commands}.go</code></h3>
+<p>Files: <span class="path">internal/cli/node_install.go</span> (~65 lines), <span class="path">internal/cli/secrets.go</span> (~225 lines), <span class="path">internal/cli/commands.go</span> (~245 lines, mostly v0.1 carry-over).</p>
+<ul class="tight">
+<li><code>nostos node install NAME</code> is the canonical entry. It blank-imports both <code>provisioner/pxe</code> and <code>provisioner/tpi</code> so their <code>init()</code> registrations fire.</li>
+<li><code>nostos up</code> remains as a deprecated alias (<span class="path">commands.go</span>, <code>newUpCmd</code>) printing <code>deprecated: nostos up; use 'nostos node install &lt;name&gt;'</code> on stderr.</li>
+<li><code>nostos secrets list</code> / <code>secrets test [scheme]</code> / <code>secrets keys list</code> / <code>secrets keys revoke</code>: secrets-introspection surface added in this session for the Tailscale OAuth flow.</li>
+</ul>
+<h2 id="decisions">4. Architecture decisions</h2>
+<p>Each decision below is grounded in <code>openspec/changes/nostos-v02-provisioners/design.md</code> (D1–D5, D-Open, D-Tests) and the four parallel reviews. “Alternatives” list what was considered and rejected; “Tradeoff” names what we lose; “Cite” points at the source of truth.</p>
+
+<div class="card decision">
+<h3>D1. Provisioner interface vs. switch statement</h3>
+<p><strong>Decision.</strong> A Go interface (<code>Provisioner</code>) with seven methods plus a registry keyed by method string. The orchestrator holds zero method-specific code paths.</p>
+<p><strong>Alternatives.</strong> (a) <code>switch node.Boot.Method { case "pxe": ...; case "tpi": ... }</code> in the orchestrator. (b) A <code>NodeView</code> value type passed to providers to decouple them from <code>internal/config</code>.</p>
+<p><strong>Tradeoff.</strong> Each new provider must wire seven methods even when most are trivial (PXE's <code>Apply</code> is a no-op). NodeView would have meant maintaining two parallel field sets; rejected per critic 2.4 — providers import <code>internal/config</code> read-only.</p>
+<p><strong>Cite.</strong> design.md D1; specs/provisioner/spec.md “Provisioner interface decouples install method from orchestrator.”</p>
+</div>
+
+<div class="card decision">
+<h3>D2. Apply is provider-owned (PXE no-op, tpi runs talosctl)</h3>
+<p><strong>Decision.</strong> Each provisioner declares its own delivery semantics in <code>Apply</code>. PXE returns nil immediately because the iPXE chain delivered the rendered config in-band. tpi runs <code>talosctl apply-config -i --file &lt;configPath&gt;</code> out-of-band.</p>
+<p><strong>Alternatives.</strong> Symmetry-for-its-own-sake: the orchestrator always invokes <code>talosctl apply-config -i</code> after <code>WaitMaintenance</code>. Critic 3.2 + security §4 demonstrated this would double-apply on the LAN for PXE — racing the maintenance-mode close window and breaking “no external behavior change for dell01.”</p>
+<p><strong>Tradeoff.</strong> The interface contract is mildly asymmetric (Apply behavior depends on the provider), but the test asserts “FakeCommander records zero <code>talosctl apply-config -i</code> calls during PXE install” and “exactly one during tpi install” — the assertion would have been impossible with forced uniformity.</p>
+<p><strong>Cite.</strong> design.md D2; specs/provisioner/spec.md “Provisioner Apply hook owns config delivery.”</p>
+</div>
+
+<div class="card decision">
+<h3>D3. Cleanup runs in a deferred block with a fresh context</h3>
+<p><strong>Decision.</strong> Cleanup is invoked in a <code>defer</code> block whose <code>ctx</code> is derived from <code>context.Background()</code> with a 60-second deadline, not from the run context. See <code>runCleanup</code> in <span class="path">internal/cluster/orchestrate.go</span>.</p>
+<p><strong>Alternatives.</strong> Honor the parent <code>ctx</code> cancellation in Cleanup. Adopted briefly until critic 2.3 + tests §1 surfaced: a Ctrl-C during <code>WaitMaintenance</code> would propagate into <code>Cleanup</code>, abort the <code>tpi power off</code>, and leave the slot in an indeterminate power state — the exact failure mode the spec claims to prevent.</p>
+<p><strong>Tradeoff.</strong> Cleanup may run for up to 60s after the operator pressed Ctrl-C. Operators expect a hard kill via second Ctrl-C to bypass.</p>
+<p><strong>Cite.</strong> design.md D2; specs/provisioner/spec.md “Cleanup runs on every termination path with a fresh context.”</p>
+</div>
+
+<div class="card decision">
+<h3>D4. <code>ContentionKey</code> vs. <code>BMCKey</code></h3>
+<p><strong>Decision.</strong> The interface method is <code>ContentionKey(node) string</code>. PXE returns <code>"pxe:server"</code>; tpi returns <code>"tpi:&lt;host&gt;"</code>; an empty string means “no shared resource.”</p>
+<p><strong>Alternatives.</strong> <code>BMCKey()</code> (the planner draft). Rejected because PXE-server contention is structurally identical (one process can bind dnsmasq+:9080 at a time) and the orchestrator should not have a special-case lock for PXE alongside the per-provider key.</p>
+<p><strong>Tradeoff.</strong> The name is one word longer.</p>
+<p><strong>Cite.</strong> synthesis.md “Interface contracts — ContentionKey replaces BMCKey”; specs/provisioner/spec.md “ContentionKey serializes shared-resource installs.”</p>
+</div>
+
+<div class="card decision">
+<h3>D5. flock at OS level vs. in-process mutex</h3>
+<p><strong>Decision.</strong> Per-node lock at <code>nostos/state/configs/&lt;name&gt;.lock</code> via <code>unix.Flock(LOCK_EX|LOCK_NB)</code>, held from the top of <code>Install</code> until return.</p>
+<p><strong>Alternatives.</strong> Rely on the in-process <code>contention.Map</code> only. Rejected because two <code>nostos node install tp1</code> shells from the same workstation would race the apply-config window with destructive side effects — see security §9.</p>
+<p><strong>Tradeoff.</strong> Cross-host operators (two laptops) are still unprotected; documented as a gap. flock is POSIX-only; Windows would require a different implementation when/if it becomes a target.</p>
+<p><strong>Cite.</strong> design.md D4; specs/provisioner/spec.md “Per-node flock serializes concurrent local invocations.”</p>
+</div>
+
+<div class="card decision">
+<h3>D6. Render after Preflight (no secrets touch disk before cheap checks)</h3>
+<p><strong>Decision.</strong> The orchestrator calls <code>Preflight</code> first, then <code>renderToTemp</code> (which resolves <code>op://</code> / <code>tailscale://</code> refs and writes a 0600 file). Render runs after Preflight, after live-node guard, before Prepare.</p>
+<p><strong>Alternatives.</strong> Render-first (the planner draft). Rejected per critic 3.1: a Preflight failure after Render leaves a stale config on disk containing freshly resolved secrets.</p>
+<p><strong>Tradeoff.</strong> Preflight cannot validate machineconfig syntax (which would require rendering); accepted in v0.2.</p>
+<p><strong>Cite.</strong> design.md D2 “Key contracts — render after Preflight”.</p>
+</div>
+
+<div class="card decision">
+<h3>D7. Image digest TOFU vs. strict pin</h3>
+<p><strong>Decision.</strong> Pinned digest in <code>cluster.image_digests</code> wins. If absent, fall back to TOFU: first download is recorded into <code>~/.cache/nostos/digests.json</code>; subsequent runs verify against the recorded value. A WARN is emitted in TOFU mode.</p>
+<p><strong>Alternatives.</strong> Strict pin only (the planner spec). Operationally too strict for first-time setup of a new SBC overlay; the operator has no way to know the digest before the first download.</p>
+<p><strong>Tradeoff.</strong> First download trusts TLS to <code>factory.talos.dev</code>. Documented as <a href="#bug5">Bug #5</a> (TOFU race window).</p>
+<p><strong>Cite.</strong> Session decision; revises specs/tpi-provisioning/spec.md “Missing digest fails closed.”</p>
+</div>
+
+<div class="card decision">
+<h3>D8. Per-node <code>schematic_id</code> override vs. cluster-only</h3>
+<p><strong>Decision.</strong> Add <code>Node.SchematicID</code> to override <code>Cluster.SchematicID</code> per-node. Resolution centralized in <code>Node.EffectiveSchematic(cluster Cluster) string</code>.</p>
+<p><strong>Alternatives.</strong> One schematic per cluster. Rejected the moment we tried to flash an arm64 RK1 module with the amd64-Dell schematic and the rockchip overlay was missing. Heterogeneous fleets are the real-world case.</p>
+<p><strong>Tradeoff.</strong> Image cache fans out by schematic, so multiple SBC families on one workstation each occupy ~1.8 GiB of decompressed <code>.raw</code>.</p>
+<p><strong>Cite.</strong> Session decision; <span class="path">internal/config/config.go</span> (<code>Node.SchematicID</code>, <code>EffectiveSchematic</code>).</p>
+</div>
+
+<div class="card decision">
+<h3>D9. Tailscale OAuth-mint vs. static authkey</h3>
+<p><strong>Decision.</strong> A new <code>tailscale://authkey</code> URI scheme backed by Tailscale's OAuth client_credentials grant. Each render mints a fresh, single-use, ephemeral, preauthorized key.</p>
+<p><strong>Alternatives.</strong> Static <code>op://</code> ref, manually rotated by the operator before each install. Rejected after the live crash loop (timeline Step 10) and per security §3 — single-use semantics are silently broken on retry.</p>
+<p><strong>Tradeoff.</strong> Adds a runtime dependency on the Tailscale API. Failed mints during render abort the install before any flash; this is the right failure mode.</p>
+<p><strong>Cite.</strong> Session decision; <span class="path">internal/secrets/tailscale.go</span>.</p>
+</div>
+
+<div class="card decision">
+<h3>D10. Fresh OAuth token per Resolve vs. cache-with-TTL</h3>
+<p><strong>Decision.</strong> <code>fetchAccessToken</code> runs once per <code>Resolve</code> call. No caching across calls.</p>
+<p><strong>Alternatives.</strong> Cache the token for its full <code>expires_in</code> (~1h). Rejected: a single render is at most a handful of mints, the OAuth endpoint is fast, and a leaked cached token has a wider blast radius than a fresh one used immediately.</p>
+<p><strong>Tradeoff.</strong> Slightly more API traffic; negligible at lab scale.</p>
+<p><strong>Cite.</strong> <span class="path">internal/secrets/tailscale.go</span> (<code>Resolve</code>: “The backend never caches the OAuth access token across Resolve calls”).</p>
+</div>
+
+<div class="card decision">
+<h3>D11. Subprocess secrets via env, not argv</h3>
+<p><strong>Decision.</strong> Resolved BMC creds reach the <code>tpi</code> child via <code>TPI_USERNAME</code>/<code>TPI_PASSWORD</code> on <code>cmd.Env</code>. Argv contains only non-secret paths and flags. Identity-file refs materialize to a 0600 file inside a 0700 dir; only the path appears in argv.</p>
+<p><strong>Alternatives.</strong> argv concatenation (<code>tpi --user $u --password $p</code>). Rejected per security §2/§8: argv is visible via <code>ps</code>, /proc/&lt;pid&gt;/cmdline, and many shell-history loggers.</p>
+<p><strong>Tradeoff.</strong> If a future <code>tpi</code> version drops env support and only takes argv, we'd have to use stdin or fail loudly. The Preflight version pin (&ge; 1.0.0) anchors us against that drift.</p>
+<p><strong>Cite.</strong> design.md D7; specs/tpi-provisioning/spec.md “BMC credentials use _ref typed schema and never reach argv or events.”</p>
+</div>
+
+<div class="card decision">
+<h3>D12. 60s Cleanup timeout (fresh context) vs. honor parent ctx</h3>
+<p><strong>Decision.</strong> Cleanup gets a fresh <code>context.Background</code>-derived 60s context. Survives Ctrl-C of the run. Single try — no retry, no backoff in v0.2.</p>
+<p><strong>Alternatives.</strong> 30s (planner draft) — too short for flaky BMCs (critic 2.3). Multiple retries — deferred to v0.3 once we have telemetry on real flash latencies.</p>
+<p><strong>Tradeoff.</strong> Open question (D-Open Q2): if real flashes show &gt;60s power-off latency we raise it. v0.2 ships single-try.</p>
+<p><strong>Cite.</strong> design.md D-Open Q2.</p>
+</div>
+<h2 id="cli">5. CLI reference</h2>
+<p>Every command shipped or modified in v0.2. Synopsis, what happens under the hood, sample output, when to use, when not to use.</p>
+
+<div class="card cli">
+<h3><code>nostos node install NAME [--reinstall] [--yes]</code></h3>
+<p><strong>Synopsis.</strong> The canonical install entry. Method-dispatched: looks up <code>cfg.Nodes[NAME].Boot.Method</code> and constructs the registered provisioner.</p>
+<p><strong>Step by step</strong> (<span class="path">internal/cli/node_install.go</span> → <span class="path">internal/cluster/orchestrate.go</span> <code>Install</code>):</p>
+<ol class="tight">
+<li>Load <code>nostos/config.yaml</code>; look up the node by name.</li>
+<li>Print the confirmation banner (“About to install <em>name</em> (method=<em>method</em>). Pass --yes to skip prompt.”) unless <code>--yes</code>.</li>
+<li>Wire <code>signal.NotifyContext</code> for SIGINT/SIGTERM.</li>
+<li>Spawn an events goroutine. Every <code>cluster.Event</code> is rendered with a colored prefix icon (<code>→</code> progress, <code>▼</code> download, <code>✓</code> ready, <code>✗</code> error).</li>
+<li>Inside <code>Install</code>: flock node, build provisioner, Preflight, live-node guard, render to temp, register Cleanup defer, contention.Acquire, Prepare, Boot, WaitMaintenance, Apply, probe apid, optional Bootstrap+FetchKubeconfig (controlplane), emit <code>ready</code>.</li>
+</ol>
+<p><strong>Sample (tpi).</strong></p>
+<pre><code>$ nostos node install tp1 --yes
+→ starting install of tp1
+→ tpi preflight ok
+→ fetching Talos image
+→ image ready: ~/.cache/nostos/images/3616.../v1.10.3/metal-arm64.raw
+→ tpi --host turingpi.local power off -n 1
+→ tpi --host turingpi.local flash -i metal-arm64.raw -n 1
+→ tpi --host turingpi.local power on -n 1
+→ waiting for apid
+◉ apid up on tp1
+✓ tp1 is Ready. kubeconfig: nostos/state/kubeconfig</code></pre>
+<p><strong>Use when</strong> you want a fresh install of a node from <code>config.yaml</code>.</p>
+<p><strong>Do NOT use when</strong> the node is already a healthy cluster member — the live-node reinstall guard refuses with <code>ErrNodeAlreadyReady</code> unless <code>--reinstall</code> is passed; even then, expect destructive flash on tpi nodes. Pair <code>--reinstall</code> with <code>--yes</code> only after explicit operator confirmation.</p>
+</div>
+
+<div class="card cli">
+<h3><code>nostos node list</code></h3>
+<p><strong>Synopsis.</strong> Print all nodes registered in <code>config.yaml</code>, sorted by name. Reads <code>cfg.Nodes</code> via <code>registry.List</code>.</p>
+<p><strong>Sample.</strong></p>
+<pre><code>$ nostos node list
+NAME    ROLE          ARCH   IP               METHOD  TEMPLATE
+dell01  controlplane  amd64  192.168.68.100   pxe     dell01.yaml
+tp1     worker        arm64  192.168.68.107   tpi     tp1.yaml
+tp4     worker        arm64  192.168.68.114   tpi     tp4.yaml</code></pre>
+<p><strong>Use when</strong> auditing which nodes the workstation knows about. <strong>Do NOT use</strong> as ground truth for cluster membership — use <code>kubectl get nodes</code> for that.</p>
+</div>
+
+<div class="card cli">
+<h3><code>nostos render NAME</code></h3>
+<p><strong>Synopsis.</strong> Render <code>NAME</code>'s template into <code>nostos/state/configs/&lt;mac-or-name&gt;.yaml</code>. Resolves <code>op://</code>, <code>file://</code>, <code>sops://</code>, <code>tailscale://</code> refs in the process.</p>
+<p><strong>Step by step</strong> (<span class="path">internal/registry/registry.go</span> <code>Render</code>):</p>
+<ol class="tight">
+<li>Read template at <code>nostos/templates/&lt;Node.Template&gt;</code>.</li>
+<li>Build backends via <code>secrets.BuildBackends(cfg)</code>.</li>
+<li>Run <code>secrets.ResolveTemplate(body, backends)</code>: every URI of the form <code>scheme://...</code> is resolved by its registered backend.</li>
+<li>Filename: <code>node.MACHyphen()</code> if non-empty, else <code>NAME</code> (the Bug #2 fix).</li>
+<li>Write 0600. If <code>talosctl</code> is on PATH, run <code>talosctl validate --mode metal</code>.</li>
+</ol>
+<p><strong>Use when</strong> debugging a template, comparing the resolved output, or feeding a manual <code>talosctl apply-config</code> recovery.</p>
+<p><strong>Do NOT use</strong> as a substitute for <code>node install</code> — a render alone does not boot, flash, or apply anything; it just resolves secrets and writes a file. Be aware: minted Tailscale auth keys are spent the moment the file is rendered, even if you never apply it.</p>
+</div>
+
+<div class="card cli">
+<h3><code>nostos status</code></h3>
+<p><strong>Synopsis.</strong> For every node in <code>config.yaml</code>, probe ICMP + TCP:50000, optionally fetch <code>talosctl version</code>. Prints a compact table.</p>
+<p>Implemented via <code>registry.Probe</code> (<span class="path">internal/registry/registry.go</span>): pings, dials TCP:50000 (apid), and runs <code>talosctl version --short</code> when apid is up.</p>
+<p><strong>Sample.</strong></p>
+<pre><code>$ nostos status
+NAME    PING  APID  VERSION
+dell01  up    up    v1.10.3
+tp1     up    up    v1.10.3
+tp4     up    up    v1.10.3</code></pre>
+<p><strong>Use when</strong> sanity-checking the lab. <strong>Do NOT use</strong> when relying on “healthy in K8s” — apid up only means Talos is reachable; for K8s readiness see <code>kubectl get nodes</code>.</p>
+</div>
+
+<div class="card cli">
+<h3><code>nostos secrets list</code></h3>
+<p><strong>Synopsis.</strong> List the schemes registered in the secrets registry and their <code>Validate()</code> status (PASS/FAIL).</p>
+<p>For each backend (<code>op</code>, <code>file</code>, <code>env</code>, <code>tailscale</code>) calls <code>Validate()</code>. The Tailscale backend's Validate hits the OAuth token endpoint without minting.</p>
+<pre><code>$ nostos secrets list
+SCHEME       STATUS  DETAIL
+env          PASS    ok
+file         PASS    ok
+op           PASS    ok
+tailscale    PASS    ok</code></pre>
+<p><strong>Use when</strong> verifying the workstation can reach all secret backends before an install run.</p>
+</div>
+
+<div class="card cli">
+<h3><code>nostos secrets test [scheme]</code></h3>
+<p><strong>Synopsis.</strong> Like <code>list</code>, but for the <code>tailscale</code> backend it actively mints a 60-second probe key and revokes it. Without arguments it tests all schemes.</p>
+<pre><code>$ nostos secrets test tailscale
+tailscale    PASS  minted+revoked smoke key id=k123abc</code></pre>
+<p><strong>Use when</strong> first wiring up the OAuth client — confirms the scope (<code>auth_keys</code>) and tagOwners ACL allow minting with your configured tags.</p>
+<p><strong>Do NOT use</strong> on a tight ACL where every minted key shows up in audit log noise; the smoke key is short-lived but it still hits the audit log.</p>
+</div>
+
+<div class="card cli">
+<h3><code>nostos secrets keys list</code></h3>
+<p><strong>Synopsis.</strong> Inventory of all auth keys in the configured tailnet (per the OAuth client's view). Hits <code>GET /api/v2/tailnet/-/keys</code> and enriches each with a per-key GET so capabilities/expiry are accurate.</p>
+<pre><code>$ nostos secrets keys list
+ID        DESCRIPTION  EXPIRES               USED  TAGS
+k123abc   nostos       2026-08-23T00:00:00Z  false  tag:k8s
+k456def   nostos       2026-08-23T00:00:00Z  true   tag:k8s</code></pre>
+<p><strong>Use when</strong> tracking authkey debt: which keys this OAuth client has minted, which are spent, which still live.</p>
+</div>
+
+<div class="card cli">
+<h3><code>nostos secrets keys revoke KEY_ID</code></h3>
+<p><strong>Synopsis.</strong> <code>DELETE /api/v2/tailnet/-/keys/&lt;id&gt;</code>. Returns <code>Revoked &lt;id&gt;</code> on success.</p>
+<p><strong>Use when</strong> a node is decommissioned and you want to retire its (single-use already-spent) authkey from the audit log.</p>
+</div>
+
+<div class="card cli">
+<h3><code>nostos up NAME</code> <span class="tag warn">deprecated</span></h3>
+<p><strong>Synopsis.</strong> Thin alias for <code>nostos node install NAME</code> retained for v0.2 compatibility. Prints <code>deprecated: nostos up; use 'nostos node install &lt;name&gt;'</code> on stderr and proceeds through the same code path.</p>
+<p>Slated for removal in v0.3 (per design D-Open Q4: 90-day grace period from v0.3 release).</p>
+<p><strong>Do NOT use</strong> in new scripts. Update Taskfile recipes to <code>task nostos:install NODE=&lt;name&gt;</code>.</p>
+</div>
+<h2 id="config">6. Configuration reference</h2>
+<p>The full <code>nostos/config.yaml</code> as it stands today, annotated. New fields shipped in v0.2 are flagged.</p>
+
+<pre><code>cluster:
+  name: talos-default                              # cluster name (used in machineconfig)
+  endpoint: https://192.168.68.100:6443            # k8s API endpoint (controlplane:6443)
+  talos_version: v1.10.3                           # pulled from factory.talos.dev
+  schematic_id: 4a0d65c669d4...22b                 # default schematic; overridable per node
+  # NEW v0.2: pinned digests for factory images. Optional (TOFU fallback).
+  # Key: "&lt;schematic_id&gt;/&lt;talos_version&gt;/&lt;arch&gt;". Value: "sha256:&lt;hex&gt;".
+  image_digests:
+    3616.../v1.10.3/arm64: sha256:e3b0c44...
+
+secrets:
+  backend: onepassword                             # primary backend for op://
+  onepassword:
+    account: my.1password.com
+    vault: kubernetes
+  # NEW v0.2: optional Tailscale OAuth backend, registers tailscale:// scheme.
+  tailscale:
+    oauth_client_id_ref:     op://kubernetes/talos/tailscale-oauth-client-id
+    oauth_client_secret_ref: op://kubernetes/talos/tailscale-oauth-client-secret
+    tags:        [tag:k8s]                          # capabilities.devices.create.tags
+    expiry:      7776000                            # seconds; default 90d
+    reusable:    false                              # default; single-use
+    ephemeral:   false                              # node lingers in tailnet on shutdown
+    preauthorized: true                             # bypass admin approval
+    description: nostos                             # shows in tailnet admin UI
+    tailnet:     ""                                 # "" =&gt; "-" =&gt; OAuth client default
+
+nodes:
+  dell01:
+    mac: "d0:94:66:d9:eb:a5"                       # required for PXE
+    ip: 192.168.68.100
+    role: controlplane
+    arch: amd64
+    install_disk: /dev/nvme0n1
+    template: dell01.yaml
+    # No boot block: defaults to method=pxe (v0.1 behavior preserved).
+
+  tp1:
+    ip: 192.168.68.107                              # static reservation; tpi has no MAC
+    role: worker
+    arch: arm64
+    install_disk: /dev/mmcblk0
+    template: tp1.yaml
+    # NEW v0.2: per-node schematic override (rockchip overlay for RK1).
+    schematic_id: 3616c4c8...4950
+    # NEW v0.2: boot.method dispatch.
+    boot:
+      method: tpi
+      tpi:
+        host: turingpi.local                        # BMC hostname
+        slot: 1                                     # 1..4
+        username_ref: op://kubernetes/home-systems/TURING_BMC_USERNAME
+        password_ref: op://kubernetes/home-systems/TURING_BMC_PASSWORD
+
+  tp4:
+    ip: 192.168.68.114
+    role: worker
+    arch: arm64
+    install_disk: /dev/mmcblk0
+    template: tp4.yaml
+    schematic_id: 3616c4c8...4950
+    boot:
+      method: tpi
+      tpi:
+        host: turingpi.local
+        slot: 4
+        username_ref: op://kubernetes/home-systems/TURING_BMC_USERNAME
+        password_ref: op://kubernetes/home-systems/TURING_BMC_PASSWORD
+</code></pre>
+
+<h3>Field-by-field (new fields only)</h3>
+<table>
+<tr><th>Path</th><th>Type</th><th>Required</th><th>Notes</th></tr>
+<tr><td><code>cluster.image_digests</code></td><td>map[string]string</td><td>recommended</td><td>Strict pin per <code>(schematic, version, arch)</code>. Without it, tpi falls back to TOFU.</td></tr>
+<tr><td><code>secrets.tailscale</code></td><td>block</td><td>optional</td><td>Registers <code>tailscale://authkey</code> scheme. Required for templates referencing it.</td></tr>
+<tr><td><code>secrets.tailscale.oauth_client_id_ref</code></td><td>Ref</td><td>yes (when block present)</td><td>Must be <code>op://</code> / <code>sops://</code> / <code>file://</code>. <code>env://</code> rejected.</td></tr>
+<tr><td><code>secrets.tailscale.oauth_client_secret_ref</code></td><td>Ref</td><td>yes</td><td>Same scheme constraints.</td></tr>
+<tr><td><code>secrets.tailscale.tags</code></td><td>[]string</td><td>optional</td><td>Default tags applied to minted keys. ACL <code>tagOwners</code> must permit.</td></tr>
+<tr><td><code>secrets.tailscale.expiry</code></td><td>int (seconds)</td><td>optional</td><td>Default 7776000 (90d). Ephemeral nodes expire faster regardless.</td></tr>
+<tr><td><code>secrets.tailscale.reusable</code> / <code>ephemeral</code> / <code>preauthorized</code></td><td>bool</td><td>optional</td><td>Per-key capability flags.</td></tr>
+<tr><td><code>secrets.tailscale.tailnet</code></td><td>string</td><td>optional</td><td><code>""</code> resolves to <code>-</code> (OAuth client default tailnet).</td></tr>
+<tr><td><code>nodes.&lt;name&gt;.schematic_id</code></td><td>string (64 hex)</td><td>optional</td><td>Per-node override for SBC overlays. Used by tpi for the image URL + digest key.</td></tr>
+<tr><td><code>nodes.&lt;name&gt;.boot.method</code></td><td>enum</td><td>optional</td><td>One of <code>{pxe, tpi}</code>. Default <code>pxe</code>.</td></tr>
+<tr><td><code>nodes.&lt;name&gt;.boot.tpi.host</code></td><td>string</td><td>yes (when tpi)</td><td>BMC hostname/IP.</td></tr>
+<tr><td><code>nodes.&lt;name&gt;.boot.tpi.slot</code></td><td>int 1–4</td><td>yes (when tpi)</td><td>Validator enforces uniqueness across <code>(host, slot)</code>.</td></tr>
+<tr><td><code>nodes.&lt;name&gt;.boot.tpi.username_ref</code></td><td>Ref</td><td>optional</td><td>BMC HTTP-basic user. <code>env://</code> rejected at unmarshal.</td></tr>
+<tr><td><code>nodes.&lt;name&gt;.boot.tpi.password_ref</code></td><td>Ref</td><td>optional</td><td>BMC HTTP-basic password.</td></tr>
+<tr><td><code>nodes.&lt;name&gt;.boot.tpi.identity_file_ref</code></td><td>Ref</td><td>optional</td><td>SSH key for newer <code>tpi</code> binaries; materialized to 0600 file in 0700 dir.</td></tr>
+</table>
+
+<div class="note">If both username/password refs and an identity-file ref are absent, the tpi provider falls back to the <code>tpi</code> CLI's cached token / interactive prompt and emits a Preflight info event noting it.</div>
+<h2 id="templates">7. Per-node template guide</h2>
+<p>Each node references a Talos machineconfig template under <code>nostos/templates/&lt;name&gt;.yaml</code>. Templates are plain Talos YAML (<code>version: v1alpha1</code>) with embedded URI references. The render pipeline replaces every URI of the form <code>scheme://...</code> with the value its registered backend resolves.</p>
+
+<h3>Supported URI schemes</h3>
+<table>
+<tr><th>Scheme</th><th>Backend</th><th>Resolution</th></tr>
+<tr><td><code>op://&lt;vault&gt;/&lt;item&gt;/&lt;field&gt;</code></td><td>1Password</td><td>Shells out to <code>op read</code> with <code>--account</code> set from <code>secrets.onepassword.account</code>.</td></tr>
+<tr><td><code>sops://&lt;path&gt;</code></td><td>SOPS</td><td>Decrypts via age key file from <code>secrets.sops.age_key_file</code>.</td></tr>
+<tr><td><code>file://&lt;path&gt;</code></td><td>file</td><td>Reads file at path; trims trailing newline.</td></tr>
+<tr><td><code>tailscale://authkey[?...]</code></td><td>Tailscale OAuth</td><td>Mints fresh auth key; query params override defaults from <code>secrets.tailscale</code>.</td></tr>
+<tr><td><code>env://&lt;NAME&gt;</code></td><td>env</td><td>Reads <code>os.Getenv(NAME)</code>. <strong>Rejected at unmarshal for <code>Ref</code>-typed fields</strong> (BMC creds).</td></tr>
+</table>
+
+<h3>Example fragments</h3>
+<p><strong>Talos machine token</strong> (every node) — plain <code>op://</code> ref:</p>
+<pre><code>machine:
+  type: worker
+  token: op://kubernetes/talos/MACHINE_TOKEN
+  ca:
+    crt: op://kubernetes/talos/MACHINE_CA_CRT
+    key: ""</code></pre>
+
+<p><strong>Tailscale extension</strong> (any node that should join the tailnet):</p>
+<pre><code># Talos system extension config
+- name: ext-tailscale
+  configFiles:
+    - content: |
+        AUTHKEY=tailscale://authkey
+        TS_EXTRA_ARGS=--accept-routes --accept-dns=false
+      mountPath: /var/etc/tailscale/tailscaled.env</code></pre>
+<p>Each <code>nostos render &lt;name&gt;</code> mints a fresh ephemeral key. <strong>Caveat:</strong> the key is spent at render time; if the run aborts before the node consumes it, the key dies unused. Operators reviewing keys via <code>nostos secrets keys list</code> see them for their full TTL.</p>
+
+<h3>Rendering pipeline</h3>
+<p>Implemented in <span class="path">internal/secrets/template.go</span> (<code>ResolveTemplate</code>):</p>
+<ol class="tight">
+<li>Scan the template body for tokens of the form <code>scheme://...</code> respecting word boundaries.</li>
+<li>For each match, look up the backend by scheme; if unknown, fail loud (“no backend registered for ref ...”).</li>
+<li>Call <code>backend.Resolve(uri)</code>; on success replace; on failure surface the wrapped error with the URI for fast operator triage.</li>
+<li>The orchestrator then writes the resolved bytes to a 0600 temp file (path goes to <code>talosctl apply-config -i --file</code>).</li>
+</ol>
+
+<h3>Template authoring rules</h3>
+<ul class="tight">
+<li>Never inline a literal credential. The <code>Ref</code> typed field for BMC creds enforces this at unmarshal time, but the rest of the template is plain YAML — reviewers should grep for <code>password:</code> / <code>token:</code> with non-URI values.</li>
+<li>Per-node hostnames, install disks, IP/MAC, hardware-specific kernel args belong in the template, not in <code>config.yaml</code>.</li>
+<li>For RK1 nodes the template typically pins <code>install.image</code> to the same factory image used to flash, plus the rockchip extensions; <span class="path">nostos/templates/tp1.yaml</span> is the reference example.</li>
+<li>For dell01 the controlplane bootstrap PKI is included; that template additionally references <code>op://kubernetes/talos/MACHINE_CA_KEY</code>.</li>
+</ul>
+<h2 id="diagram">8. Live state diagram</h2>
+<p>The data flow for <code>nostos node install tp1</code> end to end. ASCII diagram, no external rendering required.</p>
+
+<pre><code>             +------------------+         secrets.onepassword.account
+             |  Operator laptop |         + op signin
+             |  (1Password CLI) |
+             +---------+--------+
+                       |
+                       | (1) load nostos/config.yaml
+                       v
+             +---------+--------+         talosctl, tpi binaries on PATH
+             |     nostos       |
+             |  (Go binary)     |
+             +---+--------+-----+
+                 |        |
+  (2) op read   |        | (3) Tailscale OAuth
+  per op:// ref |        |     POST /api/v2/oauth/token
+                 v        v     POST /api/v2/tailnet/-/keys
+         +-------+--+   +-+---------------------+
+         | 1Password |   | api.tailscale.com    |
+         |  desktop  |   |  (mint authkey)      |
+         +-----------+   +----------------------+
+                 |        |
+                 |        | resolved authkey embedded in machineconfig
+                 v        v
+             +-----------+----+
+             |  rendered cfg  |  0600 in 0700 tempdir
+             | machineconfig  |  ~/.cache/nostos/secrets/&lt;run-id&gt;/
+             +-------+--------+
+                     |
+                     | (4) tpi.Provisioner.Boot
+                     |     env: TPI_USERNAME, TPI_PASSWORD
+                     v
+         +-----------+----------+
+         |  Turing Pi BMC       |
+         |  turingpi.local:443  |
+         +-----------+----------+
+                     |
+           (5) flash | eMMC of slot 1 (RK1 module tp1)
+                     v
+             +-------+--------+
+             |  RK1 module    |
+             |  192.168.68.107|
+             +-------+--------+
+                     |
+           (6) talosctl --insecure version (poll every 5s)
+                     |
+           (7) talosctl apply-config -i --file &lt;cfgPath&gt;
+                     |
+             [ Talos joins cluster, ext-tailscale uses the minted key,
+               node shows up on tailnet + as a Ready k8s worker ]
+</code></pre>
+
+<h3>Tailscale OAuth resolve, in detail</h3>
+<pre><code>render template (nostos render tp1, or implicit during install)
+│
+├─ ResolveTemplate scans body, finds 'tailscale://authkey'
+│
+└─ TailscaleBackend.Resolve("tailscale://authkey")
+     │
+     ├─ Resolver.ResolveRef("op://kubernetes/talos/tailscale-oauth-client-id")
+     │     └─ OnePasswordBackend.Resolve  → client_id (string)
+     │
+     ├─ Resolver.ResolveRef("op://...tailscale-oauth-client-secret")
+     │     └─ OnePasswordBackend.Resolve  → client_secret (string)
+     │
+     ├─ fetchAccessToken(ctx, id, secret)   POST /api/v2/oauth/token
+     │     grant_type=client_credentials  scope=auth_keys
+     │     → access_token (one-shot, never cached)
+     │
+     ├─ mintKey(ctx, token, opts)          POST /api/v2/tailnet/-/keys
+     │     body: capabilities.devices.create.{reusable,ephemeral,preauthorized,tags}
+     │           expirySeconds, description
+     │     → MintedKey{ID, Key, Created, Expires, Description}
+     │
+     └─ return key  → substituted into the rendered machineconfig
+</code></pre>
+
+<h3>Trust path</h3>
+<table>
+<tr><th>Boundary</th><th>Trust</th><th>Notes</th></tr>
+<tr><td>Operator laptop</td><td>Trusted</td><td>Already runs <code>op signin</code>; flock guards same-host concurrency.</td></tr>
+<tr><td>1Password</td><td>Trusted (delegated)</td><td>Backend goes through the desktop daemon. <code>OP_SESSION_*</code> stripped from child env.</td></tr>
+<tr><td>api.tailscale.com</td><td>External, TLS-pinned by Go runtime</td><td>OAuth client_id+secret kept server-side.</td></tr>
+<tr><td>factory.talos.dev</td><td>External, TLS</td><td>Mitigated by <code>cluster.image_digests</code> pin; TOFU fallback when unset.</td></tr>
+<tr><td>BMC LAN</td><td>Semi-trusted</td><td>Default credentials common; secrets via env, never argv.</td></tr>
+<tr><td>Maintenance-mode Talos</td><td>Insecure window</td><td>Authenticated-probe via <code>talosctl --insecure version</code> (verifies Talos identity, not just TCP listen).</td></tr>
+</table>
+<h2 id="bugs">9. Bugs found this session</h2>
+
+<div class="card bug" id="bug1">
+<h3>Bug #1 — BootTimeout &lt; RK1 boot time <span class="tag warn">open</span></h3>
+<p><strong>Symptom.</strong> <code>WaitMaintenance</code> returns <code>ErrTimeout</code> while the RK1 is still mid-boot. Empirically RK1 cold-boot from flash to apid-on-50000 takes 12–18 minutes on this lab (eMMC + Rockchip firmware + Talos kernel/initramfs decompression).</p>
+<p><strong>Status.</strong> Mitigated by raising <code>InstallOpts.WaitMaintenanceDeadline</code> default to 20 minutes (<span class="path">internal/cluster/orchestrate.go</span>). Not a fix — a fix would key the deadline off arch + disk type + schematic. Tracked as v0.3 work.</p>
+<p><strong>Operator workaround.</strong> Pass a longer deadline via <code>--wait-deadline</code> (when wired in v0.3) or rerun after manual <code>talosctl --insecure version</code> confirms apid is up.</p>
+</div>
+
+<div class="card fixed" id="bug2">
+<h3>Bug #2 — Empty filename for tpi nodes <span class="tag ok">FIXED</span></h3>
+<p><strong>Symptom.</strong> <code>registry.Render</code> wrote tpi-node configs to <code>nostos/state/configs/.yaml</code>. Two tpi nodes overwrote each other; manual recovery via <code>talosctl apply-config --file</code> read the wrong content.</p>
+<p><strong>Cause.</strong> Filename was always <code>node.MACHyphen()</code>. tpi nodes have no MAC; <code>MACHyphen</code> returned an empty string.</p>
+<p><strong>Fix.</strong> Fall back to the node name when MAC is empty. Landed in this session in <span class="path">internal/registry/registry.go</span>:</p>
+<pre><code>fname := node.MACHyphen()
+if fname == "" {
+    fname = name
+}</code></pre>
+</div>
+
+<div class="card bug" id="bug3">
+<h3>Bug #3 — <code>--host turingpi.local</code> redundancy <span class="tag warn">cosmetic</span></h3>
+<p><strong>Symptom.</strong> <code>tpi flash --host turingpi.local -i ... -n 1</code> works, but the same workstation also has the host pre-configured in <code>~/.config/tpi.toml</code>; passing <code>--host</code> on every call is redundant noise in the audit log.</p>
+<p><strong>Status.</strong> Not fixed. The provider always passes <code>--host</code> for determinism (multiple Turing Pi boards in a lab is a real future case). Cost: an extra noisy argv per call. Tracked for v0.3 (“maybe omit when only one board is configured”).</p>
+</div>
+
+<div class="card bug" id="bug4">
+<h3>Bug #4 — Render command tree inconsistency <span class="tag warn">cosmetic</span></h3>
+<p><strong>Symptom.</strong> <code>nostos render NAME</code> exists at the top level (legacy), while <code>nostos node install</code>, <code>nostos node list</code>, etc. live under <code>node</code>. There is no <code>nostos node render</code>.</p>
+<p><strong>Status.</strong> Not fixed. Adding <code>node render</code> as an alias is a one-line change but it would risk encouraging operators to render-without-installing, which spends Tailscale auth keys for no reason. Holding for v0.3 with a clearer warning.</p>
+</div>
+
+<div class="card bug" id="bug5">
+<h3>Bug #5 — Image digest TOFU race (record after, not before) <span class="tag warn">design tradeoff</span></h3>
+<p><strong>Symptom.</strong> In TOFU mode, the workstation downloads a fresh image, sha256s it, and records the digest. If two install runs interleave (one operator, two shells, two distinct nodes that share a schematic), both compute their own digest before either records; the slower writer overwrites the faster.</p>
+<p><strong>Status.</strong> Not fixed in v0.2. Race window is small (one HTTP fetch). Mitigation: the recorded digest is verified on every subsequent run; if drift is observed, the file is re-downloaded. The flock ensures one nostos invocation per node, but not per schematic.</p>
+<p><strong>Proper fix (v0.3).</strong> Per-schematic flock on the digest store, or move the digest record into the same atomic-rename as the cached <code>.raw.xz</code>.</p>
+</div>
+
+<div class="card bug" id="bug6">
+<h3>Bug #6 — tpi “Device not configured” misleading error <span class="tag warn">upstream</span></h3>
+<p><strong>Symptom.</strong> <code>tpi flash</code> exits 1 with stderr <code>open /dev/...: device not configured</code> when the BMC rejects HTTP-basic auth. The error message has no relation to authentication; operators reach for <code>tpi --help</code> and lose 30 minutes.</p>
+<p><strong>Cause.</strong> Upstream <code>tpi</code> CLI: BMC returns 401, <code>tpi</code> tries to open a device file as a fallback path, that fails with the misleading kernel error.</p>
+<p><strong>Workaround.</strong> nostos's <code>Preflight</code> resolves and validates BMC creds before invoking <code>tpi</code>. If the operator points at a 1Password ref that doesn't exist, the secrets backend surfaces a precise error long before <code>tpi flash</code> runs. The remaining failure mode (creds resolve, BMC rejects them) is rare in practice.</p>
+</div>
+<h2 id="roadmap">10. Roadmap</h2>
+<p>Lifted from <code>openspec/changes/nostos-v02-provisioners/tasks.md</code> §7 plus session-level decisions. v0.2 is intentionally narrow; the items below were considered and deferred with reasons documented at the time.</p>
+
+<h3>v0.3 — next change</h3>
+<table>
+<tr><th>Item</th><th>Why deferred from v0.2</th></tr>
+<tr><td><code>redfish</code> provider (iLO/iDRAC, generic Redfish)</td><td>No hardware in lab; no implementation pressure. Each provider is its own openspec change.</td></tr>
+<tr><td><code>proxmox</code> provider (covers vm-pc01)</td><td>vm-pc01 still on <code>taskfiles/talos.yml</code>.</td></tr>
+<tr><td><code>usb</code> provider (covers pc01)</td><td>pc01 (NVIDIA GPU box) still hand-flashed with <code>dd</code>.</td></tr>
+<tr><td>JSONL run log + <code>nostos run logs &lt;id&gt;</code></td><td>Only consumer is <code>--resume</code>; v0.2 ships in-memory events and operator can tee stderr.</td></tr>
+<tr><td><code>inventory.db</code> (SQLite)</td><td>No v0.2 reader; freezing schema with no usage pressure rejected.</td></tr>
+<tr><td>Drift detection + <code>nostos diff</code></td><td>Requires YAML-aware secret-subtree masking; non-trivial.</td></tr>
+<tr><td><code>nostos node install --resume &lt;run-id&gt;</code></td><td>Lands with the JSONL run log.</td></tr>
+<tr><td><code>--parallel</code> flag</td><td>Locks ship in v0.2; flag stays absent until tested on real hardware.</td></tr>
+<tr><td>Removal of <code>nostos up</code> alias</td><td>Pinned to v0.3 release per design D-Open Q4 (90-day grace if v0.3 slips).</td></tr>
+</table>
+
+<h3>v0.4</h3>
+<table>
+<tr><th>Item</th><th>Why later</th></tr>
+<tr><td><code>cluster upgrade --to &lt;ver&gt;</code></td><td>Needs a tested upgrade matrix; lifts more weight than fits in v0.3 alongside providers.</td></tr>
+<tr><td><code>secrets rotate</code> (covers Tailscale authkey)</td><td>v0.2 ships <code>nostos secrets keys revoke</code> manually; <code>rotate</code> orchestrates revoke+remint+re-render.</td></tr>
+<tr><td><code>rpi-imager</code> provider</td><td>Talos rpi-imager headless flow is undocumented and brittle.</td></tr>
+<tr><td>Comprehensive <code>nostos doctor</code></td><td>Stub adds noise; real catalog needs implementations on each check.</td></tr>
+</table>
+
+<h3>v1.0 — north star</h3>
+<table>
+<tr><th>Item</th><th>Why later</th></tr>
+<tr><td>Stable CLI surface, man pages</td><td>Requires v0.3/v0.4 churn to have settled.</td></tr>
+<tr><td>Vendored iPXE binaries (kill Docker dep)</td><td>Cross-arch build pipeline is non-trivial; Docker is already on most operator laptops.</td></tr>
+<tr><td>Homebrew tap, container image</td><td>Distribution work; deferred until CLI is stable.</td></tr>
+<tr><td>Hardware test matrix</td><td>Needs the v0.3 PR template + real-hardware CI runner; out of scope until v0.4.</td></tr>
+</table>
+<h2 id="tests">11. Test inventory</h2>
+<p><code>go test ./.submodules/nostos/...</code> reports <strong>89 tests passing across 18 packages</strong>. Test files under <code>.submodules/nostos/internal/</code>, grouped by package:</p>
+
+<table>
+<tr><th>Package</th><th>Files</th><th>What it covers</th></tr>
+<tr>
+  <td><code>internal/clockx</code></td>
+  <td><span class="path">clockx/clock_test.go</span></td>
+  <td>Real clock smoke; FakeClock determinism for downstream tests.</td>
+</tr>
+<tr>
+  <td><code>internal/config</code></td>
+  <td><span class="path">config/boot_test.go</span>, <span class="path">config/config_test.go</span>, <span class="path">config/discovery_test.go</span></td>
+  <td>Boot block YAML round-trip, dell01 backwards-compat fixture, <code>Ref</code> typed-string scheme allowlist (<code>op://</code> / <code>sops://</code> / <code>file://</code>; <code>env://</code> rejected), <code>(host, slot)</code> uniqueness, MAC required for PXE-method nodes, EffectiveSchematic.</td>
+</tr>
+<tr>
+  <td><code>internal/execx</code></td>
+  <td><span class="path">execx/commander_test.go</span></td>
+  <td>OSCommander runs <code>/bin/echo</code> and captures stdout; FakeCommander records argv/env/stdin and serves scripted exit codes.</td>
+</tr>
+<tr>
+  <td><code>internal/provisioner</code></td>
+  <td><span class="path">provisioner/provisioner_test.go</span></td>
+  <td>Registry duplicate-Register panics with method in message; <code>New("unknown")</code> returns <code>ErrNotRegistered</code>; sentinel <code>errors.Is</code> round-trip.</td>
+</tr>
+<tr>
+  <td><code>internal/provisioner/contention</code></td>
+  <td><span class="path">contention/map_test.go</span></td>
+  <td>Same-key serialization, distinct-key parallelism, refcount cleanup of map entries, idempotent release.</td>
+</tr>
+<tr>
+  <td><code>internal/provisioner/flock</code></td>
+  <td><span class="path">flock/node_test.go</span></td>
+  <td>Spawns a child holding the lock; parent <code>AcquireNode</code> returns <code>ErrLocked</code> within 100ms; child exit releases.</td>
+</tr>
+<tr>
+  <td><code>internal/provisioner/redact</code></td>
+  <td><span class="path">redact/scrubber_test.go</span></td>
+  <td>Substring redaction; longest-first ordering for overlapping prefixes (<code>secret</code>, <code>secretX</code>); <code>WrapEmitter</code> scrubs Event.Message.</td>
+</tr>
+<tr>
+  <td><code>internal/provisioner/provisionertest</code></td>
+  <td><span class="path">provisionertest/compliance_test.go</span></td>
+  <td>The compliance harness's own self-test (factory-nil guard).</td>
+</tr>
+<tr>
+  <td><code>internal/provisioner/pxe</code></td>
+  <td><span class="path">pxe/compliance_test.go</span>, <span class="path">pxe/helpers_test.go</span>, <span class="path">pxe/pxe_test.go</span></td>
+  <td>Compliance suite passes with no skips; subsequence regression for dell01 install (event Kinds [info, progress, download, download, config-fetched, apid-up, ready] with no KindError); ContentionKey == <code>pxe:server</code>.</td>
+</tr>
+<tr>
+  <td><code>internal/provisioner/tpi</code></td>
+  <td><span class="path">tpi/compliance_test.go</span>, <span class="path">tpi/image_cache_test.go</span>, <span class="path">tpi/tpi_test.go</span></td>
+  <td>Compliance suite; httptest server for download + cache-hit short-circuit; bad-digest fixture deletes the file and returns typed error; xz decompression byte-identical to <code>xz -d</code> reference; FakeCommander captures all three subprocess calls in order; argv contains no resolved password; env contains <code>TPI_PASSWORD=</code>; old-version case rejects with <code>ErrPreflight</code>; FakeClock-driven 200ms coalescing produces ≤ 151 emits over a 30s synthetic stream; symlink at key target rejected; recorded TOFU digest survives a re-run.</td>
+</tr>
+<tr>
+  <td><code>internal/pxe</code></td>
+  <td><span class="path">pxe/build_test.go</span></td>
+  <td>v0.1 PXE asset builder; preserved without behavioural change.</td>
+</tr>
+<tr>
+  <td><code>internal/registry</code></td>
+  <td><span class="path">registry/registry_test.go</span></td>
+  <td>Render dispatches to filename = MAC-hyphen or node name (Bug #2 regression); <code>Get</code> error message lists known names sorted; <code>Add</code>/<code>Remove</code> atomic-rename round-trip.</td>
+</tr>
+</table>
+
+<h3>What is <em>not</em> tested</h3>
+<ul class="tight">
+<li>Real Turing Pi flash (gated behind <code>integration && tpi</code> build tag plus env vars; manual evidence via PR template).</li>
+<li>QEMU PXE end-to-end (gated behind <code>integration && pxe</code>; nightly self-hosted runner with KVM).</li>
+<li>Cross-host concurrent operators (out of scope; documented as a gap).</li>
+<li>BMC firmware variation across <code>tpi</code> versions (hardware-only).</li>
+</ul>
+<h2 id="reviews">12. The four parallel reviews</h2>
+<p>Before implementation, the v0.2 spec was put through four independent reviews captured at <span class="path">v0.2/review-{critic,security,analyst,tests}.md</span>. Each lens caught a distinct class of issue. Synthesis lives at <span class="path">v0.2/synthesis.md</span>.</p>
+
+<h3>Critic (architecture &amp; scope)</h3>
+<p><strong>Top finding.</strong> The proposal locked in v0.3/v0.4/v1.0 shape while claiming a smallest-slice posture: six-method enum, JSONL run log, inventory.db schema, doctor catalog. Each pre-committed v0.3 work to v0.2 review.</p>
+<p><strong>Sharpest call.</strong> D2's “unified ApplyConfigInsecure” would double-apply on the LAN for PXE — “no external behavior change for dell01” was directly in tension with the orchestrator reshape.</p>
+<p><strong>Adopted.</strong> Method enum cut to <code>{pxe, tpi}</code>. Apply became provider-owned (no-op for PXE, talosctl for tpi). NodeView dropped — providers consume <code>*config.Node</code>. JSONL log + inventory.db moved to v0.3.</p>
+
+<h3>Security</h3>
+<p><strong>Top finding.</strong> Redaction was prose, not a runtime control. Image SHA-256 source of truth was hand-waved. Tailscale authkey lifecycle was missing entirely.</p>
+<p><strong>Adopted.</strong> Scrubber implemented as a wrapper around the EventEmitter, seeded once per run. <code>cluster.image_digests</code> map added (operator-pinned, git-auditable; TOFU was a session-time relaxation). <code>identity_file_ref</code> materialization spec'd (0600 in 0700 dir, <code>O_CREAT|O_EXCL</code>, <code>lstat</code> rejects symlinks). <code>Ref</code> typed string with custom YAML unmarshaller replaces the “credential-shaped value” heuristic. Per-node flock added. Subprocess secrets via env, never argv. Tailscale OAuth-mint backend (Step 11 in the timeline) is the v0.2-time response to security §3's “missing authkey lifecycle” — spec required single-use TTL, this session went one further and automated it.</p>
+
+<h3>Analyst (requirements engineering)</h3>
+<p><strong>Top finding.</strong> Load-bearing terms were undefined: “RK1” (RK1 vs Turing-Pi-hosted module class), “Ready” (apid? bootstrap? joined to etcd?), “maintenance mode” (TCP listen vs apid-on-50000 with parseable response), “drift,” “idempotent.” Spec scenarios that asserted “kind=ready” were satisfiable by emitting a literal string with no observable system state.</p>
+<p><strong>Adopted.</strong> Definitions section in design.md (RK1, maintenance mode, Ready, boot method, ContentionKey, in-band vs out-of-band). <code>WaitMaintenance</code> success requires parseable <code>talosctl --insecure version</code> response, not TCP-listen. “Ready” defined per-role (worker = apid up; controlplane = + etcd healthy + kubeconfig fetched). Method enum cut closes the “BMC overloaded across iLO/iDRAC/Turing Pi/Proxmox” ambiguity.</p>
+
+<h3>Tests</h3>
+<p><strong>Top finding.</strong> The proposal had ~24 acceptance signals, a third of which were string matches against event kinds and a third “manual evidence in PR.” The change is testable iff three seams — <code>Commander</code>, <code>Secrets</code>, <code>Clock</code> — land in PR #1 before any provider migration.</p>
+<p><strong>Adopted.</strong> Seams shipped first: <code>internal/execx/Commander</code>, <code>internal/clockx/Clock</code>, the existing <code>internal/secrets</code> Resolver. Compliance suite at <code>internal/provisioner/provisionertest/</code>. Subsequence-based regression for dell01's PXE install (no byte-equal goldens). Property test for redaction (∀ string, secret table, no member appears as substring after Scrub). FakeClock for the 200ms coalescing window's emit-count ceiling. <code>grep</code>-level invariants: <code>grep -R 'time\.Now\|time\.Sleep' internal/provisioner</code> tightly scoped; <code>grep -R 'exec\.Command' internal/provisioner</code> zero hits.</p>
+
+<h3>How synthesis combined them</h3>
+<p>The synthesis pass cut six items, tightened nine interface contracts, replaced eleven hand-waved acceptance signals with concrete observables, and recorded five open questions in <code>design.md</code> D-Open. The four reviews disagreed in places (critic wanted three hooks, tests wanted five-plus-Cleanup); synthesis kept five hooks because the tpi provider needs distinct Prepare/Boot/WaitMaintenance/Apply phases and merging them obscures the cleanup ordering.</p>
+
+<hr>
+<p style="color:var(--fg-mute);font-size:.88rem">Document sources: design.md, proposal.md, tasks.md and the two specs under <code>openspec/changes/nostos-v02-provisioners/</code>; <code>internal/{provisioner,cluster,config,cli,secrets,execx,clockx,registry}/*.go</code>; <code>nostos/config.yaml</code>, <code>nostos/templates/{dell01,tp1}.yaml</code>; the four review files and the synthesis under <code>docs/v0.2/</code>.</p>
+</main>
+</div>
+</body>
+</html>

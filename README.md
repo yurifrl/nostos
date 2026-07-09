@@ -68,6 +68,81 @@ etcd peer-to-peer traffic across LANs (e.g. an offsite Pi reaching a
 home-LAN controlplane) silently fails. `nostos render` emits a stderr
 warning if it produces a config that has Tailscale but no `--accept-routes`.
 
+## OS selection: Talos and Proxmox
+
+`nostos pxe serve` and `nostos flash` both dispatch per node from a node-level
+`os:` block in `config.yaml` (orthogonal to the boot method). By default a node
+installs Talos. A node can instead install **Proxmox VE**:
+
+```yaml
+nodes:
+  pc01:
+    mac: "fc:3c:d7:27:66:17"
+    ip: 192.168.68.101
+    role: worker
+    arch: amd64
+    install_disk: /dev/nvme0n1
+    os:
+      name: proxmox       # talos (default) | proxmox
+      version: latest     # latest (auto-resolved) | pinned e.g. "8.3-1"
+    boot:
+      method: pxe         # pxe | flash | tpi — all read os:
+```
+
+- `os.name: talos` (or no `os:` block) is unchanged — backward compatible.
+  Talos nodes still require a `template`.
+- `os.name: proxmox` needs `os.version`. nostos owns the Proxmox release layout:
+  `latest` discovers the newest `proxmox-ve_X.Y-Z.iso` from the Proxmox download
+  index (numeric, not lexical, ordering); a pinned `version` resolves directly.
+  The resolved concrete version + ISO checksum are recorded for auditability.
+- Architecture: each OS is a registered `OSImage` (`internal/osimage`), a peer to
+  the boot-method `provisioner`s. `pxe serve` and `flash` call
+  `osimage.For(node)` and never branch on the OS. A new OS is a new package that
+  registers itself — no edits to flash/serve/render.
+- `pxe serve` (proxmox): at serve start nostos resolves the version and caches
+  the ISO under the assets dir **once**; booting uses iPXE `sanboot` of the ISO
+  over HTTP (RAM-backed), so the stock installer boots unmodified.
+- `flash` (proxmox): writes the resolved ISO straight to `--device`/`--out`
+  (isohybrid); talos `flash` writes the raw image + machineconfig sidecar
+  (+ RPi EEPROM dir).
+- A `proxmox` node has no Talos machineconfig: `nostos render <node>` reports
+  there is nothing to render.
+
+Proxmox installs the **hypervisor**; creating the VMs that run on it (e.g. a
+Talos worker, Windows) is downstream and not managed by nostos.
+
+## `iso`: guest-VM install media
+
+`nostos iso` builds, publishes, and signs custom guest-VM install ISOs (e.g. a
+combined Windows ISO: base + virtio drivers + autounattend + no-keypress boot).
+It is config-driven via an `images:` block — nothing machine-specific (bucket,
+credentials) is hardcoded; the bucket is an `op://` ref resolved at runtime.
+
+```yaml
+images:
+  windows:
+    build:
+      uup_id: <uupdump build id>      # Windows base
+      edition: professional
+      driver_source: https://.../virtio-win.iso
+      answer_file: ../path/to/autounattend.xml   # relative to config root
+    store:
+      bucket: op://vault/item/bucket  # private bucket name, resolved at runtime
+      object: Win11_24H2_combined.iso
+    credentials_ref: op://vault/item/creds        # GCS service-account key JSON
+```
+
+```bash
+nostos iso build   windows   # build the combined ISO (privileged container)
+nostos iso publish windows   # upload to the (private) bucket
+nostos iso url     windows   # mint a signed URL + print a paste-ready snippet
+nostos iso prepare windows   # build -> publish -> url
+```
+
+**Prerequisites:** a container runtime (Docker) for `build`; the `op` CLI for
+credential resolution on `publish`/`url`. The object store stays **private** —
+Proxmox pulls via the short-lived V4 signed URL `url` emits.
+
 ## Multi-arch build
 
 `nostos build` (no flags) iterates every node in `config.yaml`, collects
