@@ -7,6 +7,9 @@ import (
 
 	"github.com/yurifrl/nostos/internal/cli/dryrun"
 	"github.com/yurifrl/nostos/internal/cli/inputx"
+	"github.com/yurifrl/nostos/internal/osimage"
+	_ "github.com/yurifrl/nostos/internal/osimage/proxmox" // register proxmox OSImage
+	_ "github.com/yurifrl/nostos/internal/osimage/talos"   // register talos OSImage
 	"github.com/yurifrl/nostos/internal/registry"
 )
 
@@ -37,10 +40,23 @@ func newRenderCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			out, err := registry.Render(cfg, p, args[0], !noValidate)
+			img, err := osimage.For(osimage.Deps{Cfg: cfg, Paths: p}, args[0])
 			if err != nil {
 				return err
 			}
+			data, err := img.NodeConfig(cmd.Context(), args[0], !noValidate)
+			if err != nil {
+				return err
+			}
+			if data == nil {
+				// This OS installs no machineconfig (e.g. proxmox).
+				if outputMode == "json" {
+					return outputJSON(map[string]any{"status": "noop", "node": args[0], "os": img.Name(), "reason": "os installs no machineconfig"})
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "%s installs no machineconfig; nothing to render for %s\n", img.Name(), args[0])
+				return nil
+			}
+			out := registry.ConfigPath(p, cfg.Nodes[args[0]], args[0])
 			if outputMode == "json" {
 				return outputJSON(map[string]any{"status": "rendered", "path": out, "node": args[0]})
 			}

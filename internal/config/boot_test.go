@@ -174,3 +174,110 @@ func TestRefRejectsInlineLiteral(t *testing.T) {
 		t.Fatalf("want literal rejection, got %v", err)
 	}
 }
+
+// --- node-level OS selection (talos | proxmox) ---
+
+const osClusterHeader = `
+cluster:
+  name: talos-default
+  endpoint: https://10.0.0.10:6443
+  talos_version: v1.10.3
+  schematic_id: 4a0d65c669d46663f377e7161e50cfd570c401f26fd9e7bda34a0216b6f1922b
+secrets:
+  backend: env
+nodes:
+  pc01:
+    mac: "fc:3c:d7:27:66:17"
+    ip: 192.168.68.101
+    role: worker
+    arch: amd64
+    install_disk: /dev/nvme0n1
+`
+
+func TestOSDefaultsToTalos(t *testing.T) {
+	// cp1Only has no os: block → OSName defaults to talos.
+	cfg, err := Load(writeYAML(t, cp1Only))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.Nodes["cp1"].OSName(); got != "talos" {
+		t.Fatalf("OSName = %q; want talos", got)
+	}
+}
+
+func TestOSProxmoxLatest(t *testing.T) {
+	body := osClusterHeader + `    os:
+      name: proxmox
+      version: latest
+`
+	cfg, err := Load(writeYAML(t, body))
+	if err != nil {
+		t.Fatalf("proxmox+latest should be valid: %v", err)
+	}
+	n := cfg.Nodes["pc01"]
+	if n.OSName() != "proxmox" {
+		t.Fatalf("OSName = %q; want proxmox", n.OSName())
+	}
+	if n.OS.Version != "latest" {
+		t.Fatalf("Version = %q; want latest", n.OS.Version)
+	}
+}
+
+func TestOSProxmoxPinned(t *testing.T) {
+	body := osClusterHeader + `    os:
+      name: proxmox
+      version: "8.3-1"
+`
+	cfg, err := Load(writeYAML(t, body))
+	if err != nil {
+		t.Fatalf("proxmox+pinned should be valid: %v", err)
+	}
+	if v := cfg.Nodes["pc01"].OS.Version; v != "8.3-1" {
+		t.Fatalf("Version = %q; want 8.3-1", v)
+	}
+}
+
+func TestOSProxmoxMissingVersion(t *testing.T) {
+	body := osClusterHeader + `    os:
+      name: proxmox
+`
+	_, err := Load(writeYAML(t, body))
+	if err == nil || !strings.Contains(err.Error(), "os.version is required") {
+		t.Fatalf("want missing-version error, got %v", err)
+	}
+}
+
+func TestOSProxmoxMalformedVersion(t *testing.T) {
+	body := osClusterHeader + `    os:
+      name: proxmox
+      version: "8.x"
+`
+	_, err := Load(writeYAML(t, body))
+	if err == nil || !strings.Contains(err.Error(), "is invalid") {
+		t.Fatalf("want malformed-version error, got %v", err)
+	}
+}
+
+func TestOSProxmoxNoTemplateNeeded(t *testing.T) {
+	body := osClusterHeader + `    os:
+      name: proxmox
+      version: latest
+`
+	if _, err := Load(writeYAML(t, body)); err != nil {
+		t.Fatalf("proxmox node without template should validate: %v", err)
+	}
+}
+
+func TestLegacyBootPXERejected(t *testing.T) {
+	// The removed boot.pxe.target must fail loud with a migration hint.
+	body := osClusterHeader + `    boot:
+      method: pxe
+      pxe:
+        target: proxmox
+        version: latest
+`
+	_, err := Load(writeYAML(t, body))
+	if err == nil || !strings.Contains(err.Error(), "boot.pxe is removed") {
+		t.Fatalf("want boot.pxe rejection, got %v", err)
+	}
+}

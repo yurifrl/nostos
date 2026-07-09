@@ -39,7 +39,7 @@ func TestFlashDryRun(t *testing.T) {
 	if plan.Method != "flash" {
 		t.Errorf("method: got %q, want %q", plan.Method, "flash")
 	}
-	mustHave := []string{"preflight", "download.image", "render", "assemble.file", "instructions"}
+	mustHave := []string{"preflight", "resolve", "download.image", "write.file", "instructions"}
 	got := map[string]bool{}
 	for _, s := range plan.WouldExecute {
 		got[s.Phase] = true
@@ -51,15 +51,17 @@ func TestFlashDryRun(t *testing.T) {
 	}
 }
 
-// TestFlashDryRunRPi adds the rpi_generic overlay and verifies the eeprom +
-// rpi-firmware phases appear.
+// TestFlashDryRunRPi verifies the OS-agnostic dry-run still produces a valid
+// plan for an rpi_generic node. OS internals (EEPROM, firmware) are no longer
+// enumerated in the dry-run — they live inside the OSImage FlashPlan, which the
+// dry-run intentionally does not invoke (no network / no key minting).
 func TestFlashDryRunRPi(t *testing.T) {
 	cfg := writeFlashTestConfigRPi(t)
 	stdout, _, err := runFlash(t, "--config", cfg, "--output", "json", "flash", "edge1", "--out", "/tmp/rpi.raw", "--dry-run")
 	if err != nil {
 		t.Fatalf("flash --dry-run rpi: %v\n%s", err, stdout)
 	}
-	for _, want := range []string{"download.rpi-firmware", "eeprom"} {
+	for _, want := range []string{"resolve", "download.image", "write.file"} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("expected phase %q in dry-run output, got:\n%s", want, stdout)
 		}

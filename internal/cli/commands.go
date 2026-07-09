@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -18,6 +19,10 @@ import (
 	"github.com/yurifrl/nostos/internal/cli/errs"
 	"github.com/yurifrl/nostos/internal/cluster"
 	"github.com/yurifrl/nostos/internal/config"
+	"github.com/yurifrl/nostos/internal/osimage"
+	"github.com/yurifrl/nostos/internal/osimage/talos"
+	_ "github.com/yurifrl/nostos/internal/osimage/proxmox" // register proxmox OSImage
+	"github.com/yurifrl/nostos/internal/paths"
 	"github.com/yurifrl/nostos/internal/pxe"
 	"github.com/yurifrl/nostos/internal/registry"
 )
@@ -97,8 +102,15 @@ func newPxeCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			_ = cfg
 			srv := pxe.NewServer(p)
+			// Pre-resolve + cache the image for every non-talos node so the
+			// HTTP handler can serve a ready boot script without any per-request
+			// network call. Resolution/download happen ONCE, here at serve start.
+			scripts, err := buildNetbootOverrides(cmd.Context(), cfg, p)
+			if err != nil {
+				return err
+			}
+			srv.NetbootOverrides = scripts
 			if iface != "" {
 				srv.Interface = iface
 			}
@@ -141,6 +153,47 @@ func newPxeCmd() *cobra.Command {
 	cmd.AddCommand(newPxeDoctorCmd())
 	cmd.AddCommand(newPxeStatusCmd())
 	return cmd
+}
+
+// buildNetbootOverrides returns a map of lowercase MAC -> per-MAC stage-2 iPXE
+// script for every node whose OS needs a custom netboot script. Talos nodes are
+// intentionally skipped: they use the build-time boot.ipxe so the install
+// flow's one-shot wipe re-render (talos.experimental.wipe=system) keeps working.
+// All OS-specific knowledge (resolve, download, script template) lives behind
+// the osimage seam — this loop has no per-OS conditionals beyond the documented
+// "talos uses the shared boot.ipxe" policy. Resolution/download happen ONCE
+// here at serve start, not per PXE request.
+func buildNetbootOverrides(ctx context.Context, cfg *config.Config, p paths.Paths) (map[string]string, error) {
+	scripts := map[string]string{}
+	deps := osimage.Deps{Cfg: cfg, Paths: p}
+	for name, node := range cfg.Nodes {
+		img, err := osimage.For(deps, name)
+		if err != nil {
+			return nil, errs.FromGo(err)
+		}
+		if img.Name() == talos.Name {
+			continue // talos uses the build-time boot.ipxe (+ wipe mechanism)
+		}
+		if node.MAC == "" {
+			return nil, errs.Validation("E_NETBOOT_NODE_NO_MAC",
+				fmt.Sprintf("node %s: os %q requires a mac for netboot", name, img.Name()))
+		}
+		if err := p.EnsureState(); err != nil {
+			return nil, err
+		}
+		fmt.Fprintf(outWriter, "→ resolving %s image for %s…\n", img.Name(), name)
+		ref, err := img.Resolve(ctx, name)
+		if err != nil {
+			return nil, errs.FromGo(err)
+		}
+		fmt.Fprintf(outWriter, "→ caching %s %s for %s…\n", img.Name(), ref.Version, name)
+		script, err := img.NetbootScript(ctx, name, ref)
+		if err != nil {
+			return nil, errs.FromGo(err)
+		}
+		scripts[node.MAC] = script
+	}
+	return scripts, nil
 }
 
 // pxeStatusFields is the projection schema for `nostos pxe status --fields`.
@@ -526,11 +579,23 @@ func newKubeconfigCmd() *cobra.Command {
 			if len(args) > 0 {
 				name = args[0]
 			} else {
+				// Prefer a controlplane with a Tailscale IP (reachable from any
+				// network); fall back to any controlplane. Sorted for determinism.
+				var cps []string
 				for n, node := range cfg.Nodes {
 					if node.Role == "controlplane" {
+						cps = append(cps, n)
+					}
+				}
+				sort.Strings(cps)
+				for _, n := range cps {
+					if cfg.Nodes[n].TailscaleIP != "" {
 						name = n
 						break
 					}
+				}
+				if name == "" && len(cps) > 0 {
+					name = cps[0]
 				}
 				if name == "" {
 					return fmt.Errorf("no controlplane node in config")
@@ -543,22 +608,24 @@ func newKubeconfigCmd() *cobra.Command {
 			if err := cluster.FetchKubeconfig(cmd.Context(), cfg, p, n); err != nil {
 				return err
 			}
-			tsCtx, tsErr := cluster.ConfigureTailscaleContext(cmd.Context(), cfg, p)
+			ctxs, ctxErr := cluster.GenerateContexts(cmd.Context(), cfg, p)
 			if outputMode == "json" {
-				res := map[string]string{"status": "fetched", "path": p.Kubeconfig(), "node": name}
-				if tsCtx != "" {
-					res["tailscale_context"] = tsCtx
+				res := map[string]any{"status": "fetched", "path": p.Kubeconfig(), "node": name}
+				if len(ctxs) > 0 {
+					res["contexts"] = ctxs
 				}
-				if tsErr != nil {
-					res["tailscale_warning"] = tsErr.Error()
+				if ctxErr != nil {
+					res["contexts_warning"] = ctxErr.Error()
 				}
 				return outputJSON(res)
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "kubeconfig written to %s\n", p.Kubeconfig())
-			if tsErr != nil {
-				fmt.Fprintf(cmd.ErrOrStderr(), "warn: tailscale context: %v\n", tsErr)
-			} else if tsCtx != "" {
-				fmt.Fprintf(cmd.OutOrStdout(), "tailscale context added: %s\n", tsCtx)
+			if ctxErr != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "warn: generate contexts: %v\n", ctxErr)
+			} else {
+				for _, c := range ctxs {
+					fmt.Fprintf(cmd.OutOrStdout(), "context: %s\n", c)
+				}
 			}
 			return nil
 		}),

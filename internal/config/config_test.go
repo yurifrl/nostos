@@ -146,3 +146,58 @@ func TestEmptyFile(t *testing.T) {
 		t.Fatalf("want empty error, got %v", err)
 	}
 }
+
+const validImageYAML = validYAML + `
+images:
+  windows:
+    build:
+      uup_id: f7e8991e-4fd8-4bfd-a404-0de6dccd4191
+      edition: professional
+      driver_source: https://example.com/virtio-win.iso
+      answer_file: files/autounattend.xml
+    store:
+      bucket: op://kubernetes/iso/bucket
+      object: Win11_combined.iso
+    credentials_ref: op://kubernetes/crossplane-gcp/creds
+`
+
+func TestImageLoadAndLookup(t *testing.T) {
+	cfg, err := Load(writeYAML(t, validImageYAML))
+	if err != nil {
+		t.Fatal(err)
+	}
+	img, err := cfg.ImageByName("windows")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if img.Build.UUPID == "" || img.Store.Bucket.String() != "op://kubernetes/iso/bucket" {
+		t.Errorf("image not parsed: %+v", img)
+	}
+	if string(img.CredentialsRef) != "op://kubernetes/crossplane-gcp/creds" {
+		t.Errorf("credentials_ref = %q", img.CredentialsRef)
+	}
+}
+
+func TestImageMissingLookup(t *testing.T) {
+	cfg, err := Load(writeYAML(t, validImageYAML))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cfg.ImageByName("nope"); err == nil {
+		t.Fatal("expected error for unknown image name")
+	}
+}
+
+func TestInvalidImageName(t *testing.T) {
+	body := strings.Replace(validImageYAML, "  windows:", "  Windows_X:", 1)
+	if _, err := Load(writeYAML(t, body)); err == nil || !strings.Contains(err.Error(), "image name") {
+		t.Fatalf("expected image name error, got %v", err)
+	}
+}
+
+func TestImageMissingRequiredField(t *testing.T) {
+	body := strings.Replace(validImageYAML, "      bucket: op://kubernetes/iso/bucket\n", "", 1)
+	if _, err := Load(writeYAML(t, body)); err == nil {
+		t.Fatal("expected error for missing store.bucket")
+	}
+}

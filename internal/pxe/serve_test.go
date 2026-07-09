@@ -483,3 +483,53 @@ func TestHandleBootIpxeMissingFile(t *testing.T) {
 		t.Fatalf("status = %d, want 404", rec.Code)
 	}
 }
+
+// TestHandleBootIpxeProxmoxDispatch proves a MAC registered in ProxmoxScripts
+// receives its generic-ISO (proxmox) script, while a Talos MAC in the SAME
+// serve session still gets the install chain. (task 3.6)
+func TestHandleBootIpxeProxmoxDispatch(t *testing.T) {
+	s, chain := newTestServer(t)
+	pxScript := RenderProxmoxMemdisk("8.10-1", "proxmox-ve_8.10-1.iso")
+	s.NetbootOverrides = map[string]string{"fc-3c-d7-27-66-17": pxScript}
+
+	// proxmox MAC -> memdisk script
+	req := httptest.NewRequest(http.MethodGet, "/boot.ipxe?mac=fc-3c-d7-27-66-17", nil)
+	rec := httptest.NewRecorder()
+	s.handleBootIpxe(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if rec.Body.String() != pxScript {
+		t.Errorf("proxmox MAC got wrong script:\ngot  %q\nwant %q", rec.Body.String(), pxScript)
+	}
+	if !strings.Contains(rec.Body.String(), "sanboot") || !strings.Contains(rec.Body.String(), "proxmox-ve_8.10-1.iso") {
+		t.Errorf("proxmox script missing sanboot/ISO: %q", rec.Body.String())
+	}
+
+	// Talos MAC in the same session is unchanged.
+	req2 := httptest.NewRequest(http.MethodGet, "/boot.ipxe?mac=d0-94-66-d9-eb-a5", nil)
+	rec2 := httptest.NewRecorder()
+	s.handleBootIpxe(rec2, req2)
+	if rec2.Body.String() != string(chain) {
+		t.Errorf("talos MAC should get install chain, got %q", rec2.Body.String())
+	}
+}
+
+// TestHandleBootIpxeProxmoxInstalledBootsLocal proves the installed->boot-local
+// guard applies to a proxmox MAC too: once installed, a stray re-PXE gets the
+// boot-from-disk script, NOT a reinstall. (task 3.5)
+func TestHandleBootIpxeProxmoxInstalledBootsLocal(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.NetbootOverrides = map[string]string{"fc-3c-d7-27-66-17": RenderProxmoxMemdisk("8.10-1", "proxmox-ve_8.10-1.iso")}
+	if err := MarkInstalled(s.Paths.InstalledMACs(), "fc-3c-d7-27-66-17"); err != nil {
+		t.Fatalf("MarkInstalled: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/boot.ipxe?mac=fc-3c-d7-27-66-17", nil)
+	rec := httptest.NewRecorder()
+	s.handleBootIpxe(rec, req)
+	body := rec.Body.String()
+	if !strings.Contains(body, "exit") || strings.Contains(body, "sanboot") {
+		t.Errorf("installed proxmox MAC should boot from disk, got %q", body)
+	}
+}

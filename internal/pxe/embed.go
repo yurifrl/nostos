@@ -1,6 +1,8 @@
 // Package pxe builds Talos boot assets + serves them over HTTP/TFTP/DHCP.
 package pxe
 
+import "fmt"
+
 // EmbedIpxe is the boot script we compile into the iPXE binary.
 //
 // The retry loop tolerates consumer-router DHCP races: many home routers
@@ -38,3 +40,28 @@ kernel http://${next-server}:9080/assets/vmlinuz-%s talos.platform=metal talos.c
 initrd http://${next-server}:9080/assets/initramfs-%s.xz
 boot
 `
+
+// ProxmoxMemdiskTemplate is the generic-ISO stage-2 script for a node whose
+// boot.pxe.target is "proxmox". It boots the resolved Proxmox VE ISO straight
+// over HTTP using iPXE `sanboot`, which loads the image into RAM and emulates a
+// CD so the stock installer boots unmodified — no kernel/initrd extraction and
+// no memdisk binary to embed. (kernel+initrd-direct is a later optimization.)
+//
+// The ISO is served from the HTTP document root's /assets/ dir, the same place
+// the resolver's DownloadISO caches it.
+//
+// %s placeholders (Sprintf order):
+//  1. Proxmox version (e.g. 8.10-1), for log clarity
+//  2. ISO filename under /assets/ (e.g. proxmox-ve_8.10-1.iso)
+const ProxmoxMemdiskTemplate = `#!ipxe
+# Rendered by nostos. Generic-ISO (memdisk) boot for a proxmox-target node.
+# ${next-server} resolves at runtime from the DHCP reply.
+echo nostos: booting Proxmox VE %s installer (ISO over HTTP via sanboot)
+sanboot http://${next-server}:9080/assets/%s
+`
+
+// RenderProxmoxMemdisk returns the stage-2 iPXE script that boots the given
+// Proxmox ISO (by filename) for display version.
+func RenderProxmoxMemdisk(version, isoFile string) string {
+	return fmt.Sprintf(ProxmoxMemdiskTemplate, version, isoFile)
+}

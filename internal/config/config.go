@@ -4,6 +4,7 @@ package config
 import (
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"regexp"
 	"sort"
@@ -102,21 +103,64 @@ type TPIBoot struct {
 	IdentityFileRef Ref    `yaml:"identity_file_ref,omitempty"`
 }
 
+// OSConfig is the node-level choice of which operating system nostos installs.
+// It is orthogonal to the boot method (pxe/tpi/flash) — every transport reads
+// it. Absent block defaults to "talos".
+type OSConfig struct {
+	// Name selects the OS: "talos" (default) | "proxmox".
+	Name string `yaml:"name,omitempty" validate:"omitempty,oneof=talos proxmox"`
+	// Version is required when Name != talos. Either "latest" (nostos resolves
+	// the newest release) or a pinned release (e.g. "8.3-1").
+	Version string `yaml:"version,omitempty"`
+}
+
+// PXEBoot is the REMOVED transitional boot.pxe block. It is kept only so a
+// config still carrying it fails loud with a migration hint (yaml.v3 silently
+// ignores truly-unknown fields). Use the node-level os: block instead.
+type PXEBoot struct {
+	Target  string `yaml:"target,omitempty"`
+	Version string `yaml:"version,omitempty"`
+}
+
+// proxmoxVersionRE matches a pinned Proxmox version like "8.3-1".
+var proxmoxVersionRE = regexp.MustCompile(`^\d+\.\d+-\d+$`)
+
 // Boot selects the install method for a node. Default Method is "pxe".
 type Boot struct {
-	Method string   `yaml:"method,omitempty" validate:"omitempty,oneof=pxe tpi"`
+	Method string   `yaml:"method,omitempty" validate:"omitempty,oneof=pxe tpi flash"`
 	TPI    *TPIBoot `yaml:"tpi,omitempty"`
+	// PXE is REMOVED; retained only to detect+reject legacy configs.
+	PXE *PXEBoot `yaml:"pxe,omitempty"`
+}
+
+// OSName returns the node's OS name, defaulting to "talos".
+func (n Node) OSName() string {
+	if n.OS == nil || n.OS.Name == "" {
+		return "talos"
+	}
+	return n.OS.Name
 }
 
 // Node is one declared bare-metal or VM node.
 type Node struct {
 	MAC         string `yaml:"mac,omitempty" validate:"omitempty,mac"`
 	IP          string `yaml:"ip"           validate:"required,ip4_addr"`
+	// TailscaleIP is the node's stable tailnet address (100.64.0.0/10). Set it
+	// on control planes so off-subnet peers (e.g. an offsite node) can still
+	// reach the HA control-plane endpoint when the LAN IP isn't routable.
+	TailscaleIP string `yaml:"tailscale_ip,omitempty" validate:"omitempty,ip4_addr"`
 	Role        string `yaml:"role"         validate:"required,oneof=controlplane worker"`
 	Arch        string `yaml:"arch"         validate:"required,oneof=amd64 arm64"`
 	InstallDisk string `yaml:"install_disk" validate:"required,startswith=/dev/"`
-	Template    string `yaml:"template"     validate:"required"`
-	Boot        Boot   `yaml:"boot,omitempty"`
+	// Template is the Talos machineconfig template. Required for talos-target
+	// nodes; not needed for non-talos PXE targets (e.g. proxmox), which don't
+	// render a Talos machineconfig. Conditional requirement is enforced in
+	// Validate() rather than a struct tag.
+	Template string `yaml:"template,omitempty"`
+	Boot     Boot   `yaml:"boot,omitempty"`
+	// OS selects which operating system nostos installs (default talos). It is
+	// orthogonal to Boot.Method; pxe/flash both read it.
+	OS *OSConfig `yaml:"os,omitempty"`
 	// SchematicID overrides Cluster.SchematicID for this node when set.
 	// Required for SBCs that need a different overlay than the cluster default
 	// (e.g. Turing RK1 needs siderolabs/sbc-rockchip overlay; x86 nodes don't).
@@ -148,14 +192,98 @@ func (n Node) MACHyphen() string {
 	return strings.ReplaceAll(strings.ToLower(n.MAC), ":", "-")
 }
 
+// EndpointHost returns the hostname portion of the cluster endpoint URL
+// (e.g. "api.k8s.lan" from "https://api.k8s.lan:6443"). Used to derive the
+// /etc/hosts alias and apiserver certSAN the endpoint injector emits.
+func (c Cluster) EndpointHost() (string, error) {
+	u, err := url.Parse(c.Endpoint)
+	if err != nil {
+		return "", fmt.Errorf("parse cluster endpoint %q: %w", c.Endpoint, err)
+	}
+	host := u.Hostname()
+	if host == "" {
+		return "", fmt.Errorf("cluster endpoint %q has no host", c.Endpoint)
+	}
+	return host, nil
+}
+
+// ControlPlaneEndpointAddrs returns every address the HA control-plane endpoint
+// should resolve to: each controlplane node's LAN IP followed by its Tailscale
+// IP (when set), ordered by node name for determinism. A node's resolver tries
+// them in order and connects to the first reachable apiserver.
+// ponytail: relies on dead hosts failing fast (no-route/refused), not silent
+// black-hole timeouts; true on a LAN. Swap for a VIP if all CPs go same-L2.
+func (c *Config) ControlPlaneEndpointAddrs() []string {
+	names := make([]string, 0, len(c.Nodes))
+	for name, n := range c.Nodes {
+		if n.Role == "controlplane" {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	addrs := make([]string, 0, len(names)*2)
+	for _, name := range names {
+		n := c.Nodes[name]
+		addrs = append(addrs, n.IP)
+		if n.TailscaleIP != "" {
+			addrs = append(addrs, n.TailscaleIP)
+		}
+	}
+	return addrs
+}
+
 // Config is the root document parsed from config.yaml.
 type Config struct {
-	Cluster   Cluster         `yaml:"cluster" validate:"required"`
-	Secrets   Secrets         `yaml:"secrets" validate:"required"`
+	Cluster Cluster `yaml:"cluster" validate:"required"`
+	Secrets Secrets `yaml:"secrets" validate:"required"`
 	// Bootstrap is the optional cluster-bootstrap tier. nil => legacy behavior
 	// (templates own their inline manifests; render synthesizes nothing).
 	Bootstrap *Bootstrap      `yaml:"bootstrap,omitempty"`
 	Nodes     map[string]Node `yaml:"nodes,omitempty" validate:"dive"`
+	// Images are guest-VM install ISOs (build/publish/sign), keyed by name.
+	// Everything machine-specific (bucket, object, project, creds) lives here so
+	// the code never hardcodes a machine identity.
+	Images map[string]Image `yaml:"images,omitempty" validate:"dive"`
+}
+
+// Image describes a guest-VM install ISO: how to build it, where to publish it,
+// and the credentials to do so. Resolved by name from Config.Images.
+type Image struct {
+	Build          ImageBuild `yaml:"build"           validate:"required"`
+	Store          ImageStore `yaml:"store"           validate:"required"`
+	// CredentialsRef resolves (via the secrets backend) to the object-store
+	// service-account key JSON used for upload + signing.
+	CredentialsRef Ref `yaml:"credentials_ref" validate:"required"`
+}
+
+// ImageBuild holds the inputs the container build needs to assemble the ISO.
+type ImageBuild struct {
+	UUPID        string `yaml:"uup_id"        validate:"required"`
+	Edition      string `yaml:"edition"       validate:"required"`
+	DriverSource string `yaml:"driver_source" validate:"required,url"`
+	// AnswerFile is a path (relative to the config root) to autounattend.xml.
+	AnswerFile   string `yaml:"answer_file"   validate:"required"`
+}
+
+// ImageStore is the object-store target for the built ISO. Bucket is a secret
+// ref (op://...) so the bucket name never appears as a literal in (public)
+// config; object is a plain, non-sensitive file name.
+type ImageStore struct {
+	Bucket Ref    `yaml:"bucket" validate:"required"`
+	Object string `yaml:"object" validate:"required"`
+}
+
+// ImageByName resolves a named image entry, erroring clearly when absent.
+func (c *Config) ImageByName(name string) (Image, error) {
+	img, ok := c.Images[name]
+	if !ok {
+		names := make([]string, 0, len(c.Images))
+		for n := range c.Images {
+			names = append(names, n)
+		}
+		return Image{}, fmt.Errorf("no image %q in config (known: %v)", name, names)
+	}
+	return img, nil
 }
 
 var nodeNameRE = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
@@ -215,6 +343,16 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	// Image names: kebab-case (same rule as nodes).
+	for name := range c.Images {
+		if !nodeNameRE.MatchString(name) {
+			return fmt.Errorf(
+				"invalid image name %q: must start with a lowercase letter and contain only lowercase letters, digits, and hyphens",
+				name,
+			)
+		}
+	}
+
 	// No duplicate MACs across nodes (empty MACs ignored).
 	macToNames := map[string][]string{}
 	for name, node := range c.Nodes {
@@ -261,6 +399,11 @@ func (c *Config) Validate() error {
 			// falls back to the tpi CLI's cached token / interactive prompt.
 			key := hostSlot{tpi.Host, tpi.Slot}
 			hostSlotToNames[key] = append(hostSlotToNames[key], name)
+		case "flash":
+			// flash needs no extra config: the image is produced offline by
+			// `nostos flash` and the operator boots the node by hand. The
+			// machineconfig is applied insecurely once the node reaches
+			// maintenance mode (see internal/provisioner/flash).
 		}
 	}
 
@@ -272,6 +415,31 @@ func (c *Config) Validate() error {
 		}
 		if method == "pxe" && node.MAC == "" {
 			return fmt.Errorf("node %s: boot.method=pxe requires mac", name)
+		}
+	}
+
+	// OS selection rules. Talos targets need a Talos template; non-talos
+	// targets need a version (latest | pinned) and don't need a template. The
+	// removed boot.pxe block is rejected with a migration hint.
+	for name, node := range c.Nodes {
+		if node.Boot.PXE != nil {
+			return fmt.Errorf("node %s: boot.pxe is removed; move the OS choice to a node-level os: block (e.g. os: {name: proxmox, version: latest})", name)
+		}
+		osName := node.OSName()
+		if osName == "talos" {
+			if node.Template == "" {
+				return fmt.Errorf("node %s: template is required for talos nodes", name)
+			}
+			continue
+		}
+		// Non-talos OS (e.g. proxmox): version is mandatory and validated before
+		// any network call.
+		if node.OS == nil || node.OS.Version == "" {
+			return fmt.Errorf("node %s: os.version is required when os.name=%s (use \"latest\" or a pinned release like \"8.3-1\")", name, osName)
+		}
+		v := node.OS.Version
+		if v != "latest" && !proxmoxVersionRE.MatchString(v) {
+			return fmt.Errorf("node %s: os.version %q is invalid: use \"latest\" or a pinned release matching \"<major>.<minor>-<build>\" (e.g. \"8.3-1\")", name, v)
 		}
 	}
 	var collisions []string

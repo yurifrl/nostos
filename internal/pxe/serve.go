@@ -88,6 +88,14 @@ type Server struct {
 	// additional file (the detached-tail "--log-json" pattern). Optional.
 	LogJSONPath string
 
+	// NetbootOverrides maps a lowercase MAC to a pre-rendered per-MAC stage-2
+	// iPXE script for a node whose OS is not Talos (e.g. the Proxmox sanboot
+	// script). Populated by the caller at serve start via the osimage seam
+	// (resolve + download happen ONCE there, not per PXE request). When a booting
+	// MAC is present here, it is served this script instead of the Talos
+	// boot.ipxe. Empty/nil => pure-Talos behavior.
+	NetbootOverrides map[string]string
+
 	httpSrv      *http.Server
 	dnsmasqProc  *exec.Cmd
 	httpRequests chan HTTPRequest // relayed to consumer for progress tracking
@@ -376,6 +384,20 @@ func (s *Server) handleBootIpxe(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, bootFromDiskScript, mac)
 		return
 	}
+	// Per-MAC OS override: a non-talos node gets its pre-rendered stage-2
+	// script (e.g. Proxmox sanboot); talos falls through to boot.ipxe.
+	if mac != "" {
+		if script, ok := s.netbootOverride(mac); ok {
+			s.recordEvent(Event{
+				Timestamp: time.Now(),
+				MAC:       mac,
+				Phase:     PhaseTFTP,
+				Message:   "served per-MAC OS netboot override script",
+			})
+			_, _ = io.WriteString(w, script)
+			return
+		}
+	}
 	// Install chain: serve the bytes of the already-rendered boot.ipxe.
 	install := filepath.Join(s.Paths.Assets(), "boot.ipxe")
 	b, err := os.ReadFile(install)
@@ -384,6 +406,17 @@ func (s *Server) handleBootIpxe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_, _ = w.Write(b)
+}
+
+// netbootOverride returns the pre-rendered per-MAC OS override script, if any.
+func (s *Server) netbootOverride(mac string) (string, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.NetbootOverrides == nil {
+		return "", false
+	}
+	script, ok := s.NetbootOverrides[mac]
+	return script, ok
 }
 
 // bootFromDiskScript is served to an already-installed MAC. On the lab's Dell

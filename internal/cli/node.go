@@ -22,7 +22,7 @@ func newNodeCmd() *cobra.Command {
 		Use:   "node",
 		Short: "Manage node registrations",
 	}
-	cmd.AddCommand(newNodeListCmd(), newNodeShowCmd(), newNodeRemoveCmd(), newNodeInstallCmd())
+	cmd.AddCommand(newNodeListCmd(), newNodeShowCmd(), newNodeRemoveCmd(), newNodeInstallCmd(), newNodeISOCmd())
 	return cmd
 }
 
@@ -133,6 +133,50 @@ func newNodeRemoveCmd() *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&yes, "yes", false, "skip interactive confirmation")
 	return cmd
+}
+
+// newNodeISOCmd prints the Talos Image Factory ISO download URL for a node,
+// resolved from its arch + effective schematic + cluster Talos version. Useful
+// for nodes booted manually from ISO (e.g. UTM VMs) rather than PXE/TPI.
+func newNodeISOCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "iso NAME",
+		Short: "Print the Talos factory ISO download URL for a node",
+		Args:  cobra.ExactArgs(1),
+		RunE: runEFunc(func(cmd *cobra.Command, args []string) error {
+			if err := inputx.ValidateNodeName(args[0]); err != nil {
+				return err
+			}
+			cfg, _, err := loadConfig()
+			if err != nil {
+				return err
+			}
+			n, err := registry.Get(cfg, args[0])
+			if err != nil {
+				return errs.NotFound("E_NODE_NOT_FOUND", err.Error()).
+					WithDetails(map[string]any{"name": args[0]}).
+					WithHint("nostos node list")
+			}
+			if n.OSName() != "talos" {
+				return errs.Conflict("E_NOT_TALOS", fmt.Sprintf("node %q has os=%q; no Talos ISO", args[0], n.OSName())).
+					WithHint("this command only applies to Talos nodes")
+			}
+			schematic := n.EffectiveSchematic(cfg.Cluster)
+			version := cfg.Cluster.TalosVersion
+			url := fmt.Sprintf("https://factory.talos.dev/image/%s/%s/metal-%s.iso", schematic, version, n.Arch)
+			out := struct {
+				Name      string `json:"name"`
+				Arch      string `json:"arch"`
+				Version   string `json:"version"`
+				Schematic string `json:"schematic"`
+				URL       string `json:"url"`
+			}{args[0], n.Arch, version, schematic, url}
+			return emitObjectOutput(out, nil, func() {
+				fmt.Fprintf(cmd.OutOrStdout(), "%s\n", url)
+				fmt.Fprintf(cmd.OutOrStdout(), "\ncurl -L -o talos-%s-%s.iso \\\n  %s\n", args[0], n.Arch, url)
+			})
+		}),
+	}
 }
 
 // pill returns a styled reachability badge suitable for a plain-text column.

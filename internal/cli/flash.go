@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -16,8 +17,8 @@ import (
 	"github.com/yurifrl/nostos/internal/cli/inputx"
 	"github.com/yurifrl/nostos/internal/config"
 	"github.com/yurifrl/nostos/internal/image"
+	"github.com/yurifrl/nostos/internal/osimage"
 	"github.com/yurifrl/nostos/internal/paths"
-	"github.com/yurifrl/nostos/internal/pxe"
 	"github.com/yurifrl/nostos/internal/registry"
 )
 
@@ -44,8 +45,8 @@ func newFlashCmd() *cobra.Command {
 			"    operator can copy to a FAT32 SD card to enable network boot\n" +
 			"    on a fresh Pi 4.\n" +
 			"\n" +
-			"After flashing, boot the node and apply the sidecar config with:\n" +
-			"  talosctl apply-config --insecure --nodes <ip> --file <node>-config.yaml",
+			"After flashing, boot the node and apply the config with:\n" +
+			"  nostos apply <node>",
 		Args: cobra.ExactArgs(1),
 		RunE: runEFunc(func(cmd *cobra.Command, args []string) error {
 			name := args[0]
@@ -97,30 +98,22 @@ func newFlashCmd() *cobra.Command {
 
 func emitFlashDryRun(cfg *config.Config, node config.Node, name, outPath, device string, compress bool) error {
 	plan := dryrun.New("flash")
-	schematic := node.EffectiveSchematic(cfg.Cluster)
-	plan.Add("preflight", fmt.Sprintf("validate node %s, arch=%s, overlay=%q", name, node.Arch, node.Overlay))
-	plan.Add("download.image",
-		fmt.Sprintf("download metal-%s.raw.xz for schematic %s@%s",
-			node.Arch, shorten(schematic), cfg.Cluster.TalosVersion))
-	if node.Overlay == "rpi_generic" {
-		plan.Add("download.rpi-firmware", "download start4.elf + fixup4.dat from raspberrypi/firmware")
-	}
-	plan.Add("render", fmt.Sprintf("render machineconfig for %s (mints Tailscale key)", name))
+	osName := node.OSName()
+	plan.Add("preflight", fmt.Sprintf("validate node %s (os=%s, arch=%s)", name, osName, node.Arch))
+	plan.Add("resolve", fmt.Sprintf("resolve %s image for %s", osName, name))
+	plan.Add("download.image", fmt.Sprintf("download + cache the %s image", osName))
 	if outPath != "" {
 		extra := ""
 		if compress {
 			extra = " (xz-compressed)"
 		}
-		plan.Add("assemble.file", fmt.Sprintf("write image to %s%s + sidecar config", outPath, extra))
+		plan.Add("write.file", fmt.Sprintf("write main image to %s%s + any sidecars", outPath, extra))
 	}
 	if device != "" {
-		plan.AddArgv("assemble.device", "write image to "+device,
-			[]string{"dd", "if=<raw-image>", "of=" + device, "bs=4M", "status=progress"}, nil)
+		plan.AddArgv("write.device", "write image to "+device,
+			[]string{"dd", "if=<image>", "of=" + device, "bs=4M", "status=progress"}, nil)
 	}
-	if node.Overlay == "rpi_generic" {
-		plan.Add("eeprom", "emit EEPROM recovery directory (boot.conf with BOOT_ORDER=0xf21)")
-	}
-	plan.Add("instructions", "print next-step talosctl apply-config command")
+	plan.Add("instructions", "print OS-specific next-step notes")
 	return emitDryRun(plan)
 }
 
@@ -129,87 +122,83 @@ func runFlash(ctx context.Context, cfg *config.Config, p paths.Paths, node confi
 		return err
 	}
 
-	// 1. Download Talos raw image for this (schematic, arch) pair.
-	spec := pxe.AssetSpec{
-		Schematic: node.EffectiveSchematic(cfg.Cluster),
-		Arch:      node.Arch,
-		Version:   cfg.Cluster.TalosVersion,
-		IsRPi:     node.Overlay == "rpi_generic",
-	}
-	if outputMode != "json" {
-		fmt.Fprintf(outWriter, "→ downloading Talos raw image (%s/%s)…\n", shorten(spec.Schematic), spec.Arch)
-	}
-	rawPath, err := pxe.DownloadTalosRawImage(ctx, p, spec)
-	if err != nil {
-		return errs.Network("E_TALOS_IMAGE_DOWNLOAD", err.Error())
-	}
-
-	// 2. Optionally fetch RPi firmware (start4.elf, fixup4.dat).
-	rpiDir := ""
-	if spec.IsRPi {
-		if err := pxe.DownloadRPiFirmware(ctx, p); err != nil {
-			return errs.Network("E_RPI_FIRMWARE_DOWNLOAD", err.Error())
-		}
-		rpiDir = filepath.Join(p.Assets(), "rpi-firmware")
-	}
-
-	// 3. Render machineconfig (mints Tailscale key as a side effect).
-	if outputMode != "json" {
-		fmt.Fprintf(outWriter, "→ rendering machineconfig for %s (mints Tailscale key)…\n", name)
-	}
-	cfgPath, err := registry.Render(cfg, p, name, true)
+	// Select the OS and produce its flash plan via the osimage seam. No
+	// per-OS branching here: talos yields a raw image + machineconfig sidecar
+	// (+ RPi EEPROM note); proxmox yields a single ISO.
+	img, err := osimage.For(osimage.Deps{Cfg: cfg, Paths: p}, name)
 	if err != nil {
 		return errs.FromGo(err)
 	}
-	configBytes, err := os.ReadFile(cfgPath)
-	if err != nil {
-		return errs.FromGo(err)
-	}
-
-	// 4. Assemble image.
-	b := &image.Builder{
-		NodeName:       name,
-		NodeMAC:        node.MAC,
-		NodeArch:       node.Arch,
-		NodeOverlay:    node.Overlay,
-		RawImagePath:   rawPath,
-		MachineConfig:  configBytes,
-		RPiFirmwareDir: rpiDir,
-		Compress:       compress,
-	}
+	// Preflight the device BEFORE the (slow) image download, so a
+	// missing-device error surfaces quickly. If the device exists but isn't
+	// writable, we'll use sudo dd for just the write phase.
+	var deviceNeedsSudo bool
 	if device != "" {
-		b.Out = image.ModeDevice
-		b.OutPath = device
-	} else {
-		b.Out = image.ModeFile
-		b.OutPath = outPath
+		var directWrite bool
+		directWrite, err = checkDeviceWritable(device)
+		if err != nil {
+			return err
+		}
+		deviceNeedsSudo = !directWrite
 	}
 	if outputMode != "json" {
-		fmt.Fprintf(outWriter, "→ assembling image at %s…\n", b.OutPath)
+		fmt.Fprintf(outWriter, "→ resolving %s image for %s…\n", img.Name(), name)
 	}
-	res, err := b.Assemble(ctx)
+	ref, err := img.Resolve(ctx, name)
+	if err != nil {
+		return errs.FromGo(err)
+	}
+	if outputMode != "json" {
+		fmt.Fprintf(outWriter, "→ preparing %s %s flash plan…\n", img.Name(), ref.Version)
+	}
+	plan, err := img.FlashPlan(ctx, name, ref)
 	if err != nil {
 		return errs.FromGo(err)
 	}
 
-	// 5. Emit result.
+	var res *image.Result
+	if device != "" && deviceNeedsSudo {
+		// Device not writable by current user — use sudo dd for just the
+		// write. This allows the rest of the command (including 1Password
+		// secret resolution) to run unprivileged.
+		if outputMode != "json" {
+			fmt.Fprintf(outWriter, "→ writing image to %s (via sudo)…\n", device)
+		}
+		res, err = writePlanToDeviceSudo(ctx, plan, device)
+		if err != nil {
+			return errs.FromGo(err)
+		}
+	} else {
+		dest := image.Dest{Compress: compress}
+		if device != "" {
+			dest.Mode, dest.Path = image.ModeDevice, device
+		} else {
+			dest.Mode, dest.Path = image.ModeFile, outPath
+		}
+		if outputMode != "json" {
+			fmt.Fprintf(outWriter, "→ writing image to %s…\n", dest.Path)
+		}
+		res, err = image.Write(ctx, plan, dest)
+		if err != nil {
+			return errs.FromGo(err)
+		}
+	}
+
 	if outputMode == "json" {
 		return outputJSON(map[string]any{
-			"status": "flashped",
-			"node":   name,
-			"image":  res.ImagePath,
-			"config": res.ConfigPath,
-			"eeprom": res.EEPROMPath,
+			"status":   "flashed",
+			"node":     name,
+			"os":       img.Name(),
+			"version":  ref.Version,
+			"image":    res.ImagePath,
+			"sidecars": res.Sidecars,
 		})
 	}
 
 	fmt.Fprintf(outWriter, "✓ image:  %s (%s -> %s)\n",
 		res.ImagePath, humanBytes(res.BytesIn), humanBytes(res.BytesOut))
-	if res.ConfigPath != "" {
-		fmt.Fprintf(outWriter, "✓ config: %s\n", res.ConfigPath)
-	}
-	if res.EEPROMPath != "" {
-		fmt.Fprintf(outWriter, "✓ eeprom: %s/ (copy to FAT32 SD for first-boot EEPROM flash)\n", res.EEPROMPath)
+	for _, sc := range res.Sidecars {
+		fmt.Fprintf(outWriter, "✓ sidecar: %s\n", sc)
 	}
 	fmt.Fprintln(outWriter)
 	fmt.Fprintln(outWriter, "next steps:")
@@ -225,22 +214,102 @@ func runFlash(ctx context.Context, cfg *config.Config, p paths.Paths, node confi
 		}
 		fmt.Fprintf(outWriter, "  2. boot the node\n")
 	}
-	if res.ConfigPath != "" {
-		fmt.Fprintf(outWriter, "  3. apply config once Talos is up (maintenance mode):\n")
-		fmt.Fprintf(outWriter, "       talosctl apply-config --insecure --nodes %s --file %s\n",
-			node.IP, res.ConfigPath)
-	} else {
-		fmt.Fprintf(outWriter, "  3. apply config from the rendered file under %s\n", p.Configs())
-	}
-	if res.EEPROMPath != "" {
-		fmt.Fprintln(outWriter)
-		fmt.Fprintln(outWriter, "  (Pi 4 first-time setup: format a separate microSD as FAT32, copy the eeprom dir contents,")
-		fmt.Fprintln(outWriter, "   boot the Pi until the green LED settles, then swap to the Talos disk.)")
+	for _, note := range plan.Notes {
+		fmt.Fprintf(outWriter, "  - %s\n", note)
 	}
 	return nil
 }
 
-// shorten trims a 64-char schematic id for display.
+// checkDeviceWritable verifies the operator can open the block device for
+// writing, BEFORE any long download. Returns true if the device is directly
+// writable, false if sudo will be needed for the write phase.
+func checkDeviceWritable(device string) (directWrite bool, err error) {
+	f, err := os.OpenFile(device, os.O_WRONLY, 0)
+	if err == nil {
+		_ = f.Close()
+		return true, nil
+	}
+	if os.IsPermission(err) {
+		// Device exists but not writable — we'll use sudo dd later.
+		return false, nil
+	}
+	if os.IsNotExist(err) {
+		return false, errs.NotFound("E_DEVICE_NOT_FOUND",
+			fmt.Sprintf("device %s does not exist", device)).
+			WithHint("list disks with: diskutil list (macOS) or lsblk (linux)")
+	}
+	return false, errs.FromGo(err)
+}
+
+// writePlanToDeviceSudo writes the flash plan's main image to a block device
+// via sudo dd when the current user lacks direct write access. This allows
+// nostos to run unprivileged (so 1Password CLI works) and only elevate for
+// the raw device write.
+//
+// For .xz images, pipes xz decompression directly into sudo dd (no temp file).
+func writePlanToDeviceSudo(ctx context.Context, plan osimage.FlashPlan, device string) (*image.Result, error) {
+	main, ok := plan.MainImage()
+	if !ok {
+		return nil, errors.New("writePlanToDeviceSudo: FlashPlan has no main image part")
+	}
+
+	fi, err := os.Stat(main.Path)
+	if err != nil {
+		return nil, fmt.Errorf("stat image: %w", err)
+	}
+
+	fmt.Fprintf(os.Stderr, "→ elevating to write %s to %s (sudo dd)…\n", filepath.Base(main.Path), device)
+
+	if filepath.Ext(main.Path) == ".xz" {
+		// Pipe: xz -dc <image.xz> | sudo dd of=<device> bs=4m
+		xzCmd := exec.CommandContext(ctx, "xz", "--decompress", "--stdout", main.Path)
+		ddCmd := exec.CommandContext(ctx, "sudo", "dd", "of="+device, "bs=4m", "status=progress")
+
+		pipe, err := xzCmd.StdoutPipe()
+		if err != nil {
+			return nil, fmt.Errorf("create pipe: %w", err)
+		}
+		ddCmd.Stdin = pipe
+		ddCmd.Stdout = os.Stdout
+		ddCmd.Stderr = os.Stderr
+		xzCmd.Stderr = os.Stderr
+
+		if err := ddCmd.Start(); err != nil {
+			return nil, fmt.Errorf("start sudo dd: %w", err)
+		}
+		if err := xzCmd.Run(); err != nil {
+			_ = ddCmd.Process.Kill()
+			return nil, fmt.Errorf("xz decompress: %w", err)
+		}
+		pipe.Close()
+		if err := ddCmd.Wait(); err != nil {
+			return nil, fmt.Errorf("sudo dd failed: %w", err)
+		}
+	} else {
+		ddCmd := exec.CommandContext(ctx, "sudo", "dd",
+			"if="+main.Path, "of="+device, "bs=4m", "status=progress")
+		ddCmd.Stdout = os.Stdout
+		ddCmd.Stderr = os.Stderr
+		ddCmd.Stdin = os.Stdin
+		if err := ddCmd.Run(); err != nil {
+			return nil, fmt.Errorf("sudo dd failed: %w", err)
+		}
+	}
+
+	// Eject the device after writing.
+	if runtime.GOOS == "darwin" {
+		fmt.Fprintf(os.Stderr, "→ ejecting %s…\n", device)
+		ejectCmd := exec.CommandContext(ctx, "diskutil", "eject", device)
+		ejectCmd.Stderr = os.Stderr
+		_ = ejectCmd.Run() // best-effort; don't fail the flash on eject error
+	}
+
+	return &image.Result{
+		ImagePath: device,
+		BytesIn:   fi.Size(),
+		BytesOut:  fi.Size(),
+	}, nil
+}
 func shorten(s string) string {
 	if len(s) <= 12 {
 		return s
