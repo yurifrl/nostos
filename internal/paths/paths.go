@@ -19,7 +19,11 @@
 // Talos client files stay in the standard Talos directory:
 //
 //	~/.talos/config        # talosctl client config
-//	~/.talos/kubeconfig    # kubeconfig fetched from Talos
+//
+// The cluster kubeconfig nostos fetches lives in its own directory so it never
+// clobbers a user-managed ~/.talos/kubeconfig:
+//
+//	~/.nostos/kubeconfig   # kubeconfig fetched from Talos
 package paths
 
 import (
@@ -52,11 +56,17 @@ func (p Paths) TalosDir() string {
 	}
 	return filepath.Join(p.Root(), "state")
 }
+func (p Paths) NostosDir() string {
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		return filepath.Join(home, ".nostos")
+	}
+	return filepath.Join(p.Root(), "state")
+}
 func (p Paths) Assets() string       { return filepath.Join(p.State(), "assets") }
 func (p Paths) IpxeSrc() string      { return filepath.Join(p.State(), "ipxe-src") }
 func (p Paths) Configs() string      { return filepath.Join(p.State(), "configs") }
 func (p Paths) Talosconfig() string  { return filepath.Join(p.TalosDir(), "config") }
-func (p Paths) Kubeconfig() string   { return filepath.Join(p.TalosDir(), "kubeconfig") }
+func (p Paths) Kubeconfig() string   { return filepath.Join(p.NostosDir(), "kubeconfig") }
 func (p Paths) Cache() string        { return filepath.Join(p.State(), "cache") }
 func (p Paths) Logs() string         { return filepath.Join(p.State(), "logs") }
 func (p Paths) PendingWipes() string { return filepath.Join(p.State(), "pending-wipes.json") }
