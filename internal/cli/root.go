@@ -50,10 +50,12 @@ func NewRoot(version string) *cobra.Command {
 		newBootstrapCmd(),
 		newUpCmd(),
 		newKubeconfigCmd(),
+		newHostsCmd(),
 		newNukeCmd(),
 		newConfigCmd(),
 		newSecretsCmd(),
 		newClusterCmd(),
+		newISOCmd(),
 		newSchemaCmd(),
 		newMCPCmd(),
 	)
