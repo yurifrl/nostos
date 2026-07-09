@@ -70,15 +70,17 @@ func newApplyCmd() *cobra.Command {
 				plan := dryrun.New("apply")
 				for _, name := range names {
 					plan.Add("render", "render machineconfig for "+name+" (inject secrets)")
-					plan.AddArgv("apply", "talosctl apply-config to "+name,
-						[]string{"talosctl", "apply-config", "--talosconfig", "<talosconfig>",
-							"--nodes", "<ip>", "--endpoints", "<ip>", "--file", "<rendered>",
-							"--mode", mode}, nil)
+					plan.Add("detect", "probe "+name+": authenticated vs maintenance (insecure)")
+					plan.AddArgv("apply", "talosctl apply-config to "+name+" (channel-dependent)",
+						[]string{"talosctl", "apply-config", "--nodes", "<ip>", "--file", "<rendered>",
+							"(--talosconfig ... --mode " + mode + " | --insecure)"}, nil)
 				}
 				return emitDryRun(plan)
 			}
 
-			// Confirmation gate for reboot-capable modes.
+			// Confirmation gate for reboot-capable modes: fail fast, before any
+			// node contact. Applies to all modes that can reboot (auto, reboot,
+			// staged) including an insecure first-apply, which also reboots.
 			if registry.ApplyModeReboots(mode) && !yes {
 				return errs.Conflict("E_CONFIRM_REQUIRED",
 					fmt.Sprintf("--mode=%s can reboot the node; refusing without --yes", mode)).
@@ -94,10 +96,15 @@ func newApplyCmd() *cobra.Command {
 						WithDetails(map[string]any{"name": name}).
 						WithHint("nostos node list")
 				}
-				if err := applyOne(cmd, cfg, p, node, name, mode, noValidate); err != nil {
+				ch, derr := registry.DetectChannel(p, node)
+				if derr != nil {
+					return errs.Network("E_NODE_UNREACHABLE", derr.Error()).
+						WithDetails(map[string]any{"node": name, "ip": node.IP})
+				}
+				if err := applyOne(cmd, cfg, p, node, name, mode, noValidate, ch); err != nil {
 					return err
 				}
-				applied = append(applied, map[string]any{"node": name, "mode": mode})
+				applied = append(applied, map[string]any{"node": name, "mode": mode, "channel": string(ch)})
 			}
 
 			if outputMode == "json" {
@@ -114,14 +121,28 @@ func newApplyCmd() *cobra.Command {
 	return cmd
 }
 
-// applyOne renders then applies a single node, emitting text progress.
-func applyOne(cmd *cobra.Command, cfg *config.Config, p paths.Paths, node config.Node, name, mode string, noValidate bool) error {
+// applyOne renders then applies a single node over the detected channel,
+// emitting text progress. A maintenance-mode node gets an insecure first-apply
+// (no certs yet); a running node gets the authenticated apply with --mode.
+func applyOne(cmd *cobra.Command, cfg *config.Config, p paths.Paths, node config.Node, name, mode string, noValidate bool, ch registry.Channel) error {
 	out, err := registry.Render(cfg, p, name, !noValidate)
 	if err != nil {
 		return errs.FromGo(err)
 	}
 	if outputMode != "json" {
 		fmt.Fprintf(cmd.OutOrStdout(), "→ rendered %s (%s)\n", name, out)
+	}
+	if ch == registry.ChannelMaintenance {
+		if outputMode != "json" {
+			fmt.Fprintf(cmd.OutOrStdout(), "→ %s is in maintenance mode; applying insecurely\n", name)
+		}
+		if err := registry.ApplyInsecure(node, out); err != nil {
+			return errs.FromGo(err)
+		}
+		if outputMode != "json" {
+			fmt.Fprintf(cmd.OutOrStdout(), "✓ applied %s (insecure)\n", name)
+		}
+		return nil
 	}
 	if err := registry.Apply(p, node, out, mode); err != nil {
 		return errs.FromGo(err)

@@ -77,16 +77,34 @@ func FetchKubeconfig(ctx context.Context, cfg *config.Config, p paths.Paths, nod
 	if err := ensureTalosconfig(cfg, p); err != nil {
 		return err
 	}
+	// Reach the node over its Tailscale IP when set, falling back to the LAN IP.
+	// The LAN IP is unreachable from off-subnet (other networks / offsite), which
+	// would make this fetch time out.
+	endpoint := node.IP
+	if node.TailscaleIP != "" {
+		endpoint = node.TailscaleIP
+	}
+	// Fetch into a temp file and only swap it in on success: a failed fetch must
+	// never destroy the existing kubeconfig (and its hand-added contexts).
+	if err := os.MkdirAll(filepath.Dir(p.Kubeconfig()), 0o700); err != nil {
+		return err
+	}
+	tmp := p.Kubeconfig() + ".tmp"
+	_ = os.Remove(tmp)
 	c, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	out, err := exec.CommandContext(c, "talosctl",
 		"--talosconfig", p.Talosconfig(),
-		"--nodes", node.IP,
-		"--endpoints", node.IP,
-		"kubeconfig", "--force", p.Kubeconfig(),
+		"--nodes", endpoint,
+		"--endpoints", endpoint,
+		"kubeconfig", "--force", tmp,
 	).CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("kubeconfig fetch: %s", strings.TrimSpace(string(out)))
+		_ = os.Remove(tmp)
+		return fmt.Errorf("kubeconfig fetch from %s: %s", endpoint, strings.TrimSpace(string(out)))
+	}
+	if err := os.Rename(tmp, p.Kubeconfig()); err != nil {
+		return fmt.Errorf("kubeconfig swap: %w", err)
 	}
 	return nil
 }
