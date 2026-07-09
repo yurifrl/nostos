@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"regexp"
 	"runtime"
 	"sort"
 	"strings"
@@ -23,10 +24,10 @@ import (
 type Reachability string
 
 const (
-	Unknown  Reachability = "unknown"
-	Up       Reachability = "up"
-	Down     Reachability = "down"
-	Refused  Reachability = "refused"
+	Unknown Reachability = "unknown"
+	Up      Reachability = "up"
+	Down    Reachability = "down"
+	Refused Reachability = "refused"
 )
 
 // NodeStatus is the per-node live state reported by Probe.
@@ -106,6 +107,17 @@ func Render(cfg *config.Config, p paths.Paths, name string, runValidate bool) (s
 	// machineconfig. Runs BETWEEN the text/template pass and secret resolution so
 	// the root Secret's op:// refs are resolved by the same existing pass. Talos
 	// applies inline manifests only at cluster-init, so workers are skipped.
+	// HA control-plane endpoint: derive the stable name + extraHostEntries (all
+	// nodes) and apiserver certSANs (controlplanes) from config, so no template
+	// pins a single control-plane IP. MUST run before bootstrap injection: that
+	// step embeds inline-manifest YAML with internal `---` separators in block
+	// scalars, which splitYAMLDocuments would mis-split. Emits only plain
+	// scalars so the later secret-resolution pass is unaffected.
+	templated, err = injectControlPlaneEndpoint(templated, cfg, node)
+	if err != nil {
+		return "", fmt.Errorf("inject control-plane endpoint for node %q: %w", name, err)
+	}
+
 	if cfg.Bootstrap != nil && node.Role == "controlplane" {
 		templated, err = injectBootstrapManifests(templated, cfg)
 		if err != nil {
@@ -125,14 +137,7 @@ func Render(cfg *config.Config, p paths.Paths, name string, runValidate bool) (s
 	if err := os.MkdirAll(p.Configs(), 0o755); err != nil {
 		return "", err
 	}
-	// Filename: <mac-hyphen>.yaml for PXE nodes (matches /configs/<mac>.yaml URL
-	// the iPXE chainload requests). For tpi/non-PXE nodes (no MAC), use the node
-	// name to avoid collisions on the empty-MAC -> ".yaml" path.
-	fname := node.MACHyphen()
-	if fname == "" {
-		fname = name
-	}
-	out := p.Configs() + "/" + fname + ".yaml"
+	out := ConfigPath(p, node, name)
 	if err := os.WriteFile(out, []byte(rendered), 0o600); err != nil {
 		return "", err
 	}
@@ -144,6 +149,19 @@ func Render(cfg *config.Config, p paths.Paths, name string, runValidate bool) (s
 	}
 	warnIfMissingAcceptRoutes(name, rendered)
 	return out, nil
+}
+
+// ConfigPath returns the deterministic on-disk path for a node's rendered
+// machineconfig: <state>/configs/<mac-hyphen>.yaml for PXE nodes (matching the
+// /configs/<mac>.yaml URL the iPXE chainload requests), or <name>.yaml for
+// non-PXE nodes with no MAC. Single source of truth for callers that need the
+// path without re-rendering.
+func ConfigPath(p paths.Paths, node config.Node, name string) string {
+	fname := node.MACHyphen()
+	if fname == "" {
+		fname = name
+	}
+	return p.Configs() + "/" + fname + ".yaml"
 }
 
 // warnIfMissingAcceptRoutes emits a stderr warning when a rendered template
@@ -239,6 +257,85 @@ func Apply(p paths.Paths, node config.Node, configPath, mode string) error {
 	}
 	return nil
 }
+
+// ApplyInsecure runs `talosctl apply-config --insecure` against a node still
+// in maintenance mode (freshly flashed/booted, no certs yet). Unlike Apply it
+// uses no talosconfig and the insecure channel.
+func ApplyInsecure(node config.Node, configPath string) error {
+	if _, err := exec.LookPath("talosctl"); err != nil {
+		return fmt.Errorf("talosctl not found on PATH")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	args := []string{"apply-config", "--insecure", "--nodes", node.IP, "--file", configPath}
+	out, err := exec.CommandContext(ctx, "talosctl", args...).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("talosctl apply-config --insecure: %s", strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// Channel reports how nostos can reach a node's Talos API.
+type Channel string
+
+const (
+	// ChannelSecure: the node has certs; authenticated apply works.
+	ChannelSecure Channel = "secure"
+	// ChannelMaintenance: the node answers only on the insecure channel
+	// (fresh boot, no certs yet) — first-apply must use --insecure.
+	ChannelMaintenance Channel = "maintenance"
+)
+
+// DetectChannel probes a node to decide which apply channel to use. It tries
+// an authenticated `talosctl version` first; on failure it falls back to an
+// insecure probe. Returns an error only when the node answers on neither.
+//
+// `talosctl version` always prints the client block and may exit 0 even when
+// the server is unreachable, so exit codes are unreliable. We instead require
+// the output to carry a healthy Server section (a NODE/Tag line and no
+// "error getting version").
+func DetectChannel(p paths.Paths, node config.Node) (Channel, error) {
+	if _, err := exec.LookPath("talosctl"); err != nil {
+		return "", fmt.Errorf("talosctl not found on PATH")
+	}
+	if serverResponded(exec.Command("talosctl", "version",
+		"--talosconfig", p.Talosconfig(),
+		"--nodes", node.IP, "--endpoints", node.IP)) {
+		return ChannelSecure, nil
+	}
+	if serverResponded(exec.Command("talosctl", "version",
+		"--insecure", "--nodes", node.IP)) {
+		return ChannelMaintenance, nil
+	}
+	return "", fmt.Errorf("node %s not reachable on the Talos API (neither authenticated nor insecure)", node.IP)
+}
+
+// serverResponded runs a `talosctl version` command with a short deadline and
+// reports whether the Server section came back healthy.
+func serverResponded(cmd *exec.Cmd) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
+	defer cancel()
+	cmd2 := exec.CommandContext(ctx, cmd.Args[0], cmd.Args[1:]...)
+	out, _ := cmd2.CombinedOutput()
+	s := string(out)
+	if !strings.Contains(s, "Server:") {
+		return false
+	}
+	if strings.Contains(s, "error getting version") || strings.Contains(s, "certificate") {
+		return false
+	}
+	return versionRE.MatchString(serverSection(s))
+}
+
+// serverSection returns the text after the "Server:" marker.
+func serverSection(s string) string {
+	if i := strings.Index(s, "Server:"); i >= 0 {
+		return s[i:]
+	}
+	return ""
+}
+
+var versionRE = regexp.MustCompile(`Tag:\s*v?\d+\.\d+\.\d+`)
 
 // Add writes a new node entry to config.yaml atomically. Fails if the name already exists.
 func Add(cfgPath, name string, node config.Node) error {

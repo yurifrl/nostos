@@ -26,6 +26,13 @@ cluster:
 secrets:
   backend: env
 nodes:
+  cp1:
+    mac: "d0:94:66:d9:eb:a5"
+    ip: 10.0.0.10
+    role: controlplane
+    arch: arm64
+    install_disk: /dev/mmcblk0
+    template: cp1.yaml
   w1:
     ip: 10.0.0.107
     role: worker
