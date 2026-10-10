@@ -66,12 +66,18 @@ func newUpgradeCmd() *cobra.Command {
 				names = []string{args[0]}
 			} else {
 				for _, e := range registry.List(cfg) {
+					// Hosts (e.g. Proxmox hypervisors) are infrastructure, not
+					// Talos cluster members — talosctl upgrade does not apply.
+					if e.Node.NodeType() == "host" {
+						continue
+					}
 					names = append(names, e.Name)
 				}
 			}
 			sort.Strings(names)
 			if len(names) == 0 {
-				return errs.Validation("E_NO_NODES", "no nodes in config.yaml").
+				return errs.Validation("E_NO_NODES",
+					"no upgradable Talos nodes in config.yaml (type=host entries are excluded)").
 					WithHint("nostos node list")
 			}
 
@@ -84,6 +90,11 @@ func newUpgradeCmd() *cobra.Command {
 					return errs.NotFound("E_NODE_NOT_FOUND", err.Error()).
 						WithDetails(map[string]any{"name": name}).
 						WithHint("nostos node list")
+				}
+				if n.NodeType() == "host" {
+					return errs.Validation("E_HOST_NOT_UPGRADABLE",
+						fmt.Sprintf("%s is type=host (infrastructure, not a cluster member); talosctl upgrade does not apply", name)).
+						WithHint("hosts are excluded from 'nostos upgrade --all'; upgrade the host with its own tooling (e.g. the Proxmox GUI)")
 				}
 				nodes = append(nodes, n)
 				refs = append(refs, upgrade.NodeRef{Name: name, IP: n.IP, Role: n.Role})
