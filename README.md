@@ -79,7 +79,8 @@ nodes:
   pc01:
     mac: "fc:3c:d7:27:66:17"
     ip: 192.168.68.101
-    role: worker
+    type: host          # metal (default) | vm | host — hosts take no role:
+                        # they are infrastructure, not cluster members
     arch: amd64
     install_disk: /dev/nvme0n1
     os:

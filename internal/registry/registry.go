@@ -34,7 +34,8 @@ const (
 type NodeStatus struct {
 	Name    string       `json:"name"`
 	IP      string       `json:"ip"`
-	Role    string       `json:"role"`
+	Type    string       `json:"type"`
+	Role    string       `json:"role,omitempty"`
 	Ping    Reachability `json:"ping"`
 	Apid    Reachability `json:"apid"`
 	Version string       `json:"version,omitempty"`
@@ -384,13 +385,21 @@ func Remove(cfgPath, name string) error {
 	return atomicWriteYAML(cfgPath, raw)
 }
 
-// Probe checks ping + apid TCP:50000 for a node.
+// Probe checks ping + apid TCP:50000 for a node. Apid and version fall back
+// to the node's tailnet IP when the LAN is unreachable (e.g. probing from
+// offsite) so status still reports cluster reachability over Tailscale.
 func Probe(node config.Node, timeout time.Duration) NodeStatus {
-	s := NodeStatus{IP: node.IP, Role: node.Role}
+	s := NodeStatus{IP: node.IP, Type: node.NodeType(), Role: node.Role}
 	s.Ping = pingProbe(node.IP, timeout)
 	s.Apid = tcpProbe(node.IP, 50000, timeout)
+	if s.Apid != Up && node.TailscaleIP != "" {
+		s.Apid = tcpProbe(node.TailscaleIP, 50000, timeout)
+	}
 	if s.Apid == Up {
 		s.Version = talosctlVersion(node.IP)
+		if s.Version == "" && node.TailscaleIP != "" {
+			s.Version = talosctlVersion(node.TailscaleIP)
+		}
 	}
 	return s
 }

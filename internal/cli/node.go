@@ -15,7 +15,7 @@ import (
 )
 
 // nodeStatusFields is the schema used by --fields validation for node list/show/status.
-var nodeStatusFields = []string{"name", "ip", "role", "ping", "apid", "version"}
+var nodeStatusFields = []string{"name", "ip", "type", "role", "ping", "apid", "version"}
 
 func newNodeCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -50,15 +50,19 @@ func newNodeListCmd() *cobra.Command {
 			return emitListOutput(rows, nodeStatusFields, fields, func() {
 				header := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("13"))
 				fmt.Fprintf(cmd.OutOrStdout(), "%s\n", header.Render(fmt.Sprintf("Nodes in %s", cfg.Cluster.Name)))
-				fmt.Fprintf(cmd.OutOrStdout(), "%-10s  %-16s  %-12s  %-8s  %-8s  %s\n",
-					"NAME", "IP", "ROLE", "PING", "APID", "VERSION")
+				fmt.Fprintf(cmd.OutOrStdout(), "%-10s  %-16s  %-6s  %-13s  %-8s  %-8s  %s\n",
+					"NAME", "IP", "TYPE", "ROLE", "PING", "APID", "VERSION")
 				for _, s := range rows {
 					ver := s.Version
 					if ver == "" {
 						ver = "—"
 					}
-					fmt.Fprintf(cmd.OutOrStdout(), "%-10s  %-16s  %-12s  %s  %s  %s\n",
-						s.Name, s.IP, s.Role, pill(s.Ping), pill(s.Apid), ver)
+					role := s.Role
+					if role == "" {
+						role = "—"
+					}
+					fmt.Fprintf(cmd.OutOrStdout(), "%-10s  %-16s  %-6s  %-13s  %s  %s  %s\n",
+						s.Name, s.IP, s.Type, role, pill(s.Ping), pill(s.Apid), ver)
 				}
 			})
 		}),

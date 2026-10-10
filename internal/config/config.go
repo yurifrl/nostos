@@ -149,7 +149,13 @@ type Node struct {
 	// on control planes so off-subnet peers (e.g. an offsite node) can still
 	// reach the HA control-plane endpoint when the LAN IP isn't routable.
 	TailscaleIP string `yaml:"tailscale_ip,omitempty" validate:"omitempty,ip4_addr"`
-	Role        string `yaml:"role"         validate:"required,oneof=controlplane worker"`
+	// Type classifies the node's shape: "metal" (bare metal cluster member),
+	// "vm" (virtual machine cluster member), or "host" (infrastructure host
+	// such as a Proxmox hypervisor PXE target — not a cluster member).
+	// Default when omitted: "metal" (normalized in Load). Hosts must not
+	// carry a role; the rule is enforced in Validate().
+	Type string `yaml:"type,omitempty" validate:"omitempty,oneof=metal vm host"`
+	Role string `yaml:"role"         validate:"omitempty,oneof=controlplane worker"`
 	Arch        string `yaml:"arch"         validate:"required,oneof=amd64 arm64"`
 	InstallDisk string `yaml:"install_disk" validate:"required,startswith=/dev/"`
 	// Template is the Talos machineconfig template. Required for talos-target
@@ -176,6 +182,15 @@ type Node struct {
 	// from `/proc/cpuinfo` or boot screen. Currently informational only;
 	// reserved for future RPi PXE/TFTP support.
 	Serial string `yaml:"serial,omitempty" validate:"omitempty,len=8,hexadecimal"`
+}
+
+// NodeType returns the node's type, defaulting to "metal" when unset.
+// Centralizes the default so config loading, probing, and rendering agree.
+func (n Node) NodeType() string {
+	if n.Type == "" {
+		return "metal"
+	}
+	return n.Type
 }
 
 // EffectiveSchematic returns the node's SchematicID when set, otherwise the
@@ -305,12 +320,13 @@ func Load(path string) (*Config, error) {
 	}
 
 	// Normalize before validation: lowercase MAC, strip surrounding whitespace,
-	// default Boot.Method to "pxe" when omitted.
+	// default Boot.Method to "pxe" and Type to "metal" when omitted.
 	for name, node := range cfg.Nodes {
 		node.MAC = strings.ToLower(strings.TrimSpace(node.MAC))
 		if node.Boot.Method == "" {
 			node.Boot.Method = "pxe"
 		}
+		node.Type = node.NodeType()
 		cfg.Nodes[name] = node
 	}
 
@@ -350,6 +366,22 @@ func (c *Config) Validate() error {
 				"invalid image name %q: must start with a lowercase letter and contain only lowercase letters, digits, and hyphens",
 				name,
 			)
+		}
+	}
+
+	// Type/role semantics: role is a cluster-membership concept, so an
+	// infrastructure host (type=host, e.g. a Proxmox hypervisor PXE target)
+	// must not carry one; every cluster member must declare one.
+	for name, node := range c.Nodes {
+		switch node.NodeType() {
+		case "host":
+			if node.Role != "" {
+				return fmt.Errorf("node %s: role must be empty for type=host (hosts are not cluster members)", name)
+			}
+		default:
+			if node.Role == "" {
+				return fmt.Errorf("node %s: role is required for cluster members (one of controlplane, worker)", name)
+			}
 		}
 	}
 
