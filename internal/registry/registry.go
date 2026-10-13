@@ -3,6 +3,7 @@ package registry
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	texttemplate "text/template"
 	"time"
 
@@ -39,6 +41,7 @@ type NodeStatus struct {
 	Ping    Reachability `json:"ping"`
 	Apid    Reachability `json:"apid"`
 	Version string       `json:"version,omitempty"`
+	Kubelet string       `json:"kubelet,omitempty"`
 }
 
 // List returns node entries in sorted order (by name).
@@ -388,7 +391,9 @@ func Remove(cfgPath, name string) error {
 // Probe checks ping + apid TCP:50000 for a node. Apid and version fall back
 // to the node's tailnet IP when the LAN is unreachable (e.g. probing from
 // offsite) so status still reports cluster reachability over Tailscale.
-func Probe(node config.Node, timeout time.Duration) NodeStatus {
+// nodeName keys the kubelet version lookup against the cluster (kubectl
+// metadata.name); pass "" to skip it.
+func Probe(nodeName string, node config.Node, timeout time.Duration) NodeStatus {
 	s := NodeStatus{IP: node.IP, Type: node.NodeType(), Role: node.Role}
 	s.Ping = pingProbe(node.IP, timeout)
 	s.Apid = tcpProbe(node.IP, 50000, timeout)
@@ -400,6 +405,7 @@ func Probe(node config.Node, timeout time.Duration) NodeStatus {
 		if s.Version == "" && node.TailscaleIP != "" {
 			s.Version = talosctlVersion(node.TailscaleIP)
 		}
+		s.Kubelet = clusterKubeletVersion(nodeName)
 	}
 	return s
 }
@@ -481,13 +487,93 @@ func talosctlVersion(ip string) string {
 	if err != nil {
 		return ""
 	}
+	// `talosctl version` prints a Client section, then a Server section, each
+	// with a `Tag:` line. The node's Talos version is the one under Server —
+	// grabbing the first Tag in the file returns the client binary's version
+	// instead.
+	inServer := false
 	for _, line := range strings.Split(string(out), "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "Server:") || strings.HasPrefix(line, "Tag:") {
-			if idx := strings.Index(line, ":"); idx >= 0 {
-				return strings.TrimSpace(line[idx+1:])
+		trimmed := strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(trimmed, "Server:"):
+			inServer = true
+		case strings.HasPrefix(trimmed, "Client:"):
+			inServer = false
+		case inServer && strings.HasPrefix(trimmed, "Tag:"):
+			if idx := strings.Index(trimmed, ":"); idx >= 0 {
+				return strings.TrimSpace(trimmed[idx+1:])
 			}
 		}
 	}
 	return ""
+}
+
+// Kubelet version cannot come from `talosctl containers` — kubelet is a
+// machined service, not a container. It is read from the cluster instead
+// (kubectl nodeInfo.kubeletVersion), which is the authoritative version the
+// node registered with the apiserver. Nodes are matched by
+// metadata.name (== the nostos node name); IP-based matching fails because
+// Talos registers the Tailscale address as node InternalIP, which the nostos
+// config does not always mirror. One kubectl call serves every node, so
+// results are cached for 30s across successive Probe calls.
+func clusterKubeletVersion(nodeName string) string {
+	if nodeName == "" {
+		return ""
+	}
+	if _, err := exec.LookPath("kubectl"); err != nil {
+		return ""
+	}
+	for _, v := range cachedKubeletVersions() {
+		if v.name == nodeName {
+			return v.version
+		}
+	}
+	return ""
+}
+
+type kubeletNode struct {
+	name    string
+	version string
+}
+
+var kubectlKubeletCache struct {
+	mu      sync.Mutex
+	fetched time.Time
+	nodes   []kubeletNode
+}
+
+func cachedKubeletVersions() []kubeletNode {
+	kubectlKubeletCache.mu.Lock()
+	defer kubectlKubeletCache.mu.Unlock()
+	if !kubectlKubeletCache.fetched.IsZero() && time.Since(kubectlKubeletCache.fetched) < 30*time.Second {
+		return kubectlKubeletCache.nodes
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "kubectl", "get", "nodes", "-o", "json").Output()
+	if err != nil {
+		return nil
+	}
+	var list struct {
+		Items []struct {
+			Metadata struct {
+				Name string `json:"name"`
+			} `json:"metadata"`
+			Status struct {
+				NodeInfo struct {
+					KubeletVersion string `json:"kubeletVersion"`
+				} `json:"nodeInfo"`
+			} `json:"status"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(out, &list); err != nil {
+		return nil
+	}
+	nodes := make([]kubeletNode, 0, len(list.Items))
+	for _, it := range list.Items {
+		nodes = append(nodes, kubeletNode{name: it.Metadata.Name, version: it.Status.NodeInfo.KubeletVersion})
+	}
+	kubectlKubeletCache.fetched = time.Now()
+	kubectlKubeletCache.nodes = nodes
+	return nodes
 }

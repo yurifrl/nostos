@@ -28,7 +28,7 @@ func newStatusCmd() *cobra.Command {
 			entries := registry.List(cfg)
 			rows := make([]registry.NodeStatus, 0, len(entries))
 			for _, e := range entries {
-				s := registry.Probe(e.Node, 1500*time.Millisecond)
+				s := registry.Probe(e.Name, e.Node, 1500*time.Millisecond)
 				s.Name = e.Name
 				rows = append(rows, s)
 			}
@@ -49,19 +49,23 @@ func newStatusCmd() *cobra.Command {
 				})
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "Cluster %s\n", cfg.Cluster.Name)
-			fmt.Fprintf(cmd.OutOrStdout(), "%-10s  %-16s  %-6s  %-13s  %-8s  %-8s  %s\n",
-				"NAME", "IP", "TYPE", "ROLE", "PING", "APID", "VERSION")
+			fmt.Fprintf(cmd.OutOrStdout(), "%-10s  %-16s  %-6s  %-13s  %-8s  %-8s  %-9s  %s\n",
+				"NAME", "IP", "TYPE", "ROLE", "PING", "APID", "VERSION", "KUBELET")
 			for _, s := range rows {
 				ver := s.Version
 				if ver == "" {
 					ver = "—"
 				}
+				kub := s.Kubelet
+				if kub == "" {
+					kub = "—"
+				}
 				role := s.Role
 				if role == "" {
 					role = "—"
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "%-10s  %-16s  %-6s  %-13s  %s  %s  %s\n",
-					s.Name, s.IP, s.Type, role, pill(s.Ping), pill(s.Apid), ver)
+				fmt.Fprintf(cmd.OutOrStdout(), "%-10s  %-16s  %-6s  %-13s  %s  %s  %-9s  %s\n",
+					s.Name, s.IP, s.Type, role, pill(s.Ping), pill(s.Apid), ver, kub)
 			}
 			return nil
 		}),

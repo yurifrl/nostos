@@ -142,7 +142,7 @@ func Install(
 
 	// Live-node reinstall guard.
 	if !opts.Reinstall {
-		if alive := probeReady(node); alive {
+		if alive := probeReady(nodeName, node); alive {
 			err := provisioner.ErrNodeAlreadyReady
 			clusterEmit(newEvent(KindError, fmt.Sprintf("%v: %s already healthy; pass --reinstall to force", err, nodeName), nodeName))
 			_ = runCleanup(prov, &node, emit)
@@ -212,7 +212,7 @@ func Install(
 	clusterEmit(newEvent(KindProgress, "waiting for apid", nodeName))
 	apidDeadline := time.Now().Add(3 * time.Minute)
 	for time.Now().Before(apidDeadline) {
-		if probeApid(node) {
+		if probeApid(nodeName, node) {
 			clusterEmit(newEvent(KindApidUp, "apid up on "+nodeName, nodeName))
 			break
 		}
@@ -281,14 +281,14 @@ func renderToTemp(cfg *config.Config, p paths.Paths, nodeName string) (string, f
 
 // probeReady reports whether the node is currently healthy at its IP.
 // Uses the existing Probe (talosctl version short).
-func probeReady(node config.Node) bool {
-	s := registry.Probe(node, 1500*time.Millisecond)
+func probeReady(nodeName string, node config.Node) bool {
+	s := registry.Probe(nodeName, node, 1500*time.Millisecond)
 	return s.Apid == registry.Up && s.Version != ""
 }
 
 // probeApid is a cheap reachability check for apid.
-func probeApid(node config.Node) bool {
-	s := registry.Probe(node, 2*time.Second)
+func probeApid(nodeName string, node config.Node) bool {
+	s := registry.Probe(nodeName, node, 2*time.Second)
 	return s.Apid == registry.Up
 }
 
