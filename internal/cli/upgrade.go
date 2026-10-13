@@ -100,6 +100,10 @@ func newUpgradeCmd() *cobra.Command {
 				refs = append(refs, upgrade.NodeRef{Name: name, IP: n.IP, Role: n.Role})
 			}
 			ordered := upgrade.OrderNodes(refs)
+			byName := map[string]config.Node{}
+			for i, name := range names {
+				byName[name] = nodes[i]
+			}
 
 			// Fetch the release catalog (network).
 			catalog, err := upgrade.FetchCatalog(cmd.Context(), nil)
@@ -108,16 +112,51 @@ func newUpgradeCmd() *cobra.Command {
 					WithHint("check network access to api.github.com")
 			}
 
-			// Detect each node's running version (network/exec).
+			// Detect each node's running version (network/exec). Unreachable
+			// nodes are skipped with a warning instead of aborting the whole
+			// sweep — a down VM must not block upgrading the rest of the
+			// cluster (observed: one offline UTM VM froze every other node's
+			// upgrade for an entire session). Detection falls back to the
+			// node's Tailscale IP when its LAN IP is not routable.
 			current := map[string]upgrade.Version{}
+			workingIP := map[string]string{}
+			var skipped []string
 			for _, ref := range ordered {
-				v, err := upgrade.DetectVersion("", p.Talosconfig(), ref.IP)
+				n := byName[ref.Name]
+				eps := append([]string{n.IP}, n.TailscaleIP)
+				v, ep, err := upgrade.DetectVersionAny("", p.Talosconfig(), eps...)
 				if err != nil {
-					return errs.Network("E_DETECT",
-						fmt.Sprintf("detect version for %s (%s): %v", ref.Name, ref.IP, err)).
-						WithHint("ensure the node is reachable and talosconfig is valid")
+					skipped = append(skipped, ref.Name)
+					if outputMode != "json" {
+						fmt.Fprintf(cmd.ErrOrStderr(), "warn: skipping %s (%s): unreachable\n", ref.Name, n.IP)
+					}
+					continue
 				}
+				workingIP[ref.Name] = ep
 				current[ref.Name] = v
+			}
+			if len(current) == 0 {
+				return errs.Network("E_DETECT",
+					"no configured node is reachable").
+					WithHint("ensure at least one node answers talosctl (nostos status)")
+			}
+			// Drop skipped nodes from the plan entirely so BuildPlan's
+			// current-version map and per-step node lists stay consistent.
+			if len(skipped) > 0 {
+				kept := ordered[:0]
+				for _, ref := range ordered {
+					if _, dead := current[ref.Name]; dead {
+						kept = append(kept, ref)
+					}
+				}
+				ordered = kept
+			}
+			// Pin execution to the endpoint that actually answered so the
+			// upgrade + health gates use the same route detection did.
+			for i := range ordered {
+				if ep := workingIP[ordered[i].Name]; ep != "" {
+					ordered[i].IP = ep
+				}
 			}
 
 			// Compute the per-minor step path from the lowest current version,
@@ -169,11 +208,15 @@ func newUpgradeCmd() *cobra.Command {
 			if dryRun {
 				if outputMode == "json" {
 					return outputJSON(map[string]any{
-						"status": "preview",
-						"method": "upgrade",
-						"target": target.String(),
-						"steps":  plan.Steps,
+						"status":  "preview",
+						"method":  "upgrade",
+						"target":  target.String(),
+						"steps":   plan.Steps,
+						"skipped": skipped,
 					})
+				}
+				for _, name := range skipped {
+					fmt.Fprintf(cmd.OutOrStdout(), "  skip %s: unreachable\n", name)
 				}
 				fmt.Fprintf(cmd.OutOrStdout(), "Upgrade plan (target %s):\n", target)
 				for _, s := range plan.Steps {
@@ -200,10 +243,6 @@ func newUpgradeCmd() *cobra.Command {
 			// an older server never sees a much-newer client (which trips its
 			// gRPC keepalive flood protection). We cache talosctl binaries under
 			// p.Cache()/bin and track each node's current version as it climbs.
-			byName := map[string]config.Node{}
-			for i, name := range names {
-				byName[name] = nodes[i]
-			}
 			binCache := filepath.Join(p.Cache(), "bin")
 			if err := os.MkdirAll(binCache, 0o755); err != nil {
 				return errs.FromGo(err)
