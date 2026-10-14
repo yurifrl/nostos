@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -225,6 +226,9 @@ func newUpgradeK8sCmd() *cobra.Command {
 					fmt.Fprintln(cmd.OutOrStdout(), line)
 				}
 			}
+			// touched tracks the nodes this run actually changed (hops +
+			// kubelet applies) — the final Ready gate covers only them.
+			var touched []string
 			for _, h := range hops {
 				for _, c := range reachableCPs {
 					talosctlBin, err := upgrade.EnsureTalosctl(ctx, c.cur, binCache, nil)
@@ -236,6 +240,7 @@ func newUpgradeK8sCmd() *cobra.Command {
 					if outputMode != "json" {
 						fmt.Fprintf(cmd.OutOrStdout(), "→ hop %s: upgrade-k8s on %s (%s)\n", h, c.name, c.ip)
 					}
+					touched = append(touched, c.name)
 					if err := upgrade.ExecUpgradeK8s(talosctlBin, p.Talosconfig(), c.ip, h); err != nil {
 						return errs.FromGo(err)
 					}
@@ -246,7 +251,8 @@ func newUpgradeK8sCmd() *cobra.Command {
 				}
 			}
 
-			// Kubelet sync: bump templates, re-render, apply no-reboot, gate.
+			// touched tracks the nodes this run actually changed (hops +
+			// kubelet applies) — the final Ready gate covers only them.
 			for _, kp := range kplans {
 				if !kp.dirty {
 					continue
@@ -261,12 +267,14 @@ func newUpgradeK8sCmd() *cobra.Command {
 					}
 					continue
 				}
-				if !changed {
-					continue // already pinned at target
-				}
-				if outputMode != "json" {
+				// `changed` is informational: the template may already pin the
+				// target (e.g. edited while the node was offline) while the node
+				// still runs the old kubelet. The loop only reaches here for
+				// dirty nodes (running kubelet below target), so always apply.
+				if changed && outputMode != "json" {
 					fmt.Fprintf(cmd.OutOrStdout(), "→ kubelet %s: template → %s\n", kp.name, target)
 				}
+				touched = append(touched, kp.name)
 				out, err := registry.Render(cfg, p, kp.name, true)
 				if err != nil {
 					return errs.FromGo(err)
@@ -283,18 +291,16 @@ func newUpgradeK8sCmd() *cobra.Command {
 				if err := registry.Apply(p, np, out, "no-reboot"); err != nil {
 					return errs.FromGo(err)
 				}
-				talosctlBin, err := upgrade.EnsureTalosctl(ctx, kp.cur, binCache, nil)
-				if err != nil {
-					return errs.FromGo(err)
-				}
-				if err := upgrade.WaitKubelet(ctx, talosctlBin, p.Talosconfig(), np.IP, target, 5*time.Minute, 10*time.Second, progress); err != nil {
+				if err := upgrade.WaitKubelet(ctx, kubeconfig, kp.name, target, 5*time.Minute, 10*time.Second, progress); err != nil {
 					return errs.Timeout("E_KUBELET", err.Error()).
 						WithHint("kubelet did not pick up the new image pin in time")
 				}
 			}
 
-			// Final gates: every node Ready, floor at target.
-			if notReady, err := upgrade.NodesReady(ctx, kubeconfig); err != nil {
+			// Final gate: nodes this run changed must be Ready. Cluster-wide
+			// state is visible in `nostos status`; a pre-existing NotReady
+			// elsewhere must not mask a completed upgrade.
+			if notReady, err := upgrade.NodesReady(ctx, kubeconfig, touched...); err != nil {
 				return errs.FromGo(err)
 			} else if len(notReady) > 0 {
 				return errs.Internal("E_NODES_NOT_READY",
@@ -311,7 +317,12 @@ func newUpgradeK8sCmd() *cobra.Command {
 					"not_ready": state.NotReady,
 				})
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "✓ Kubernetes control plane upgraded to %s (kubelet synced via templates)\n", target)
+			if len(touched) == 0 {
+				fmt.Fprintf(cmd.OutOrStdout(), "✓ nothing to do — cluster already at %s\n", target)
+			} else {
+				fmt.Fprintf(cmd.OutOrStdout(), "✓ updated %s to %s (nodes: %s)\n",
+					target, "kubelet/hops", strings.Join(touched, ", "))
+			}
 			return nil
 		}),
 	}

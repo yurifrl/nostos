@@ -22,9 +22,6 @@ import (
 // pods, ghcr.io/siderolabs elsewhere), so match on the image basename.
 var kubeImageRE = regexp.MustCompile(`(?:^|/)kube-(apiserver|controller-manager|scheduler|proxy):v(\d+\.\d+\.\d+)`)
 
-// kubeletTagRE extracts `vX.Y.Z` from a kubelet image or kubeletVersion field.
-var kubeletTagRE = regexp.MustCompile(`kubelet:v(\d+\.\d+\.\d+)`)
-
 // K8sState is the cluster's live Kubernetes version picture.
 type K8sState struct {
 	// Floor is the LOWEST control-plane version (apiserver, controller-manager,
@@ -124,10 +121,10 @@ func DetectK8sState(ctx context.Context, kubeconfig string) (K8sState, error) {
 		return st, err
 	}
 	for _, it := range nodes.Items {
-		if m := kubeletTagRE.FindStringSubmatch(it.Status.NodeInfo.KubeletVersion); m != nil {
-			if v, err := ParseVersion("v" + m[1]); err == nil {
-				st.Kubelets[it.Metadata.Name] = v
-			}
+		// nodeInfo.kubeletVersion is the bare tag ("v1.32.1"), not an image
+		// reference — parse it directly.
+		if v, err := ParseVersion(it.Status.NodeInfo.KubeletVersion); err == nil {
+			st.Kubelets[it.Metadata.Name] = v
 		}
 		ready := false
 		for _, c := range it.Status.Conditions {
@@ -221,47 +218,48 @@ func WaitK8sHop(ctx context.Context, kubeconfig string, hop Version, timeout, in
 	}
 }
 
-// KubeletImageTag returns the kubelet image tag (e.g. "v1.32.1") running on
-// nodeIP, read from `talosctl containers` (the kubelet image line carries
-// ghcr.io/siderolabs/kubelet:vX.Y.Z).
-func KubeletImageTag(bin, talosconfigPath, nodeIP string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	args := []string{"--talosconfig", talosconfigPath, "--nodes", nodeIP, "--endpoints", nodeIP, "containers"}
-	out, err := exec.CommandContext(ctx, bin, args...).Output()
-	if err != nil {
-		return "", fmt.Errorf("talosctl containers (%s): %v", nodeIP, err)
+// KubeletVersion returns the kubelet version the apiserver heartbeated for
+// nodeName (nodeInfo.kubeletVersion — the RUNNING kubelet's version, not the
+// machineconfig pin). Kubelet is a machined service on Talos and does not
+// appear in `talosctl containers`, so the cluster view is the only reliable
+// runtime source.
+func KubeletVersion(ctx context.Context, kubeconfig, nodeName string) (Version, error) {
+	var node struct {
+		Status struct {
+			NodeInfo struct {
+				KubeletVersion string `json:"kubeletVersion"`
+			} `json:"nodeInfo"`
+		} `json:"status"`
 	}
-	for _, line := range strings.Split(string(out), "\n") {
-		if idx := strings.Index(line, "kubelet:"); idx >= 0 {
-			tag := strings.TrimSpace(line[idx+len("kubelet:"):])
-			if tag != "" {
-				return tag, nil
-			}
-		}
+	if err := kubectlJSON(ctx, kubeconfig, "get node "+nodeName, &node); err != nil {
+		return Version{}, err
 	}
-	return "", nil
+	return ParseVersion(node.Status.NodeInfo.KubeletVersion)
 }
 
-// WaitKubelet polls nodeIP until its kubelet image tag reaches want.
-func WaitKubelet(ctx context.Context, bin, talosconfigPath, nodeIP string, want Version, timeout, interval time.Duration, progress func(string)) error {
+// WaitKubelet polls the apiserver until nodeName's RUNNING kubelet reports
+// want. The restarted kubelet heartbeats its new version seconds after
+// applying the machineconfig, so no reboot is required to observe the bump.
+func WaitKubelet(ctx context.Context, kubeconfig, nodeName string, want Version, timeout, interval time.Duration, progress func(string)) error {
 	deadline := time.Now().Add(timeout)
 	var last string
 	for {
-		tag, err := KubeletImageTag(bin, talosconfigPath, nodeIP)
-		if err == nil && tag != "" {
-			if tag == want.String() {
-				return nil
-			}
-			last = tag
+		v, err := KubeletVersion(ctx, kubeconfig, nodeName)
+		switch {
+		case err != nil:
 			if progress != nil {
-				progress(fmt.Sprintf("  … %s kubelet at %s, waiting for %s", nodeIP, last, want))
+				progress(fmt.Sprintf("  … %s kubelet unreachable, retrying", nodeName))
 			}
-		} else if progress != nil {
-			progress(fmt.Sprintf("  … %s kubelet unreachable, retrying", nodeIP))
+		case v == want:
+			return nil
+		case v != (Version{}):
+			last = v.String()
+			if progress != nil {
+				progress(fmt.Sprintf("  … %s kubelet at %s, waiting for %s", nodeName, last, want))
+			}
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("timeout waiting for %s kubelet to reach %s (last seen %s)", nodeIP, want, last)
+			return fmt.Errorf("timeout waiting for %s kubelet to reach %s (last seen %s)", nodeName, want, last)
 		}
 		select {
 		case <-ctx.Done():
@@ -272,13 +270,27 @@ func WaitKubelet(ctx context.Context, bin, talosconfigPath, nodeIP string, want 
 }
 
 // NodesReady reports the names of nodes whose Ready condition is not True
-// (empty slice = every node Ready).
-func NodesReady(ctx context.Context, kubeconfig string) ([]string, error) {
+// (empty slice = every node Ready). With `only` set, the check is limited to
+// those node names — e.g. just the nodes a run actually changed.
+func NodesReady(ctx context.Context, kubeconfig string, only ...string) ([]string, error) {
 	st, err := DetectK8sState(ctx, kubeconfig)
 	if err != nil {
 		return nil, err
 	}
-	return st.NotReady, nil
+	if len(only) == 0 {
+		return st.NotReady, nil
+	}
+	want := make(map[string]bool, len(only))
+	for _, n := range only {
+		want[n] = true
+	}
+	var out []string
+	for _, n := range st.NotReady {
+		if want[n] {
+			out = append(out, n)
+		}
+	}
+	return out, nil
 }
 
 var kubeletPinRE = regexp.MustCompile(`ghcr\.io/siderolabs/kubelet:v\d+\.\d+\.\d+`)
