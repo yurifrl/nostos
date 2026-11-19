@@ -4,35 +4,14 @@
 
 A single Go CLI (with a Charm v2 TUI) that owns the bare-metal-to-cluster flow for single-operator [Talos Linux](https://www.talos.dev/) home labs.
 
-## Status
-
-**v0.1 — alpha.** Developed in-tree as a git submodule (`.submodules/nostos/`)
-and consumed from a parent infrastructure repo. The Go module path is
-`github.com/yurifrl/nostos`.
-
-A prior Python prototype exists on the `python` branch for historical reference.
-
-## Invocation
-
-Always via `go run`. No install, no build step, no binary to ship:
-
-```bash
-# from your infrastructure repo root (nostos vendored as a submodule):
-go run ./.submodules/nostos/cmd/nostos --version
-go run ./.submodules/nostos/cmd/nostos --help
-```
-
-The repo root has a `go.work` pointing at `.submodules/nostos/` so Go resolves
-the module correctly from any working directory in the repo.
-
 ## Quickstart (once v0.1 ships)
 
 ```bash
 # in a new directory
-go run ./.submodules/nostos/cmd/nostos init
-go run ./.submodules/nostos/cmd/nostos node add cp1
-go run ./.submodules/nostos/cmd/nostos build
-go run ./.submodules/nostos/cmd/nostos up cp1     # end-to-end install
+nostos init
+nostos node add cp1
+nostos build
+nostos up cp1     # end-to-end install
 ```
 
 ## `flash`: zero-touch remote nodes
@@ -169,24 +148,6 @@ path.
 
 See [`docs/tailscale-authkey-refresh.md`](../../docs/tailscale-authkey-refresh.md)
 for the focused behavior doc.
-
-## Stack
-
-- Go 1.22+
-- [cobra](https://github.com/spf13/cobra) — subcommand routing
-- Charm v2:
-  - [bubbletea](https://charm.land/bubbletea) — TUI runtime
-  - [lipgloss](https://charm.land/lipgloss) — styling
-  - [bubbles](https://charm.land/bubbles) — reusable components
-  - [huh](https://charm.land/huh) — interactive forms
-- stdlib `crypto/ed25519`, `crypto/x509` — native admin-cert regen (no `talosctl gen` shell-out)
-
-## Non-goals
-
-- Not [Sidero Omni](https://www.siderolabs.com/platform/sidero-omni/). No SaaS, zero phone-home.
-- Not [Matchbox](https://github.com/poseidon/matchbox) / [Tinkerbell](https://tinkerbell.org/). Single-operator, not datacenter.
-- Not a Talos or Kubernetes replacement. Thin orchestrator around existing tools.
-- No web UI in v0.1. TUI only. Web UI is a v0.3 conversation.
 
 ## License
 
