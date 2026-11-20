@@ -120,6 +120,7 @@ func newUpgradeCmd() *cobra.Command {
 			// node's Tailscale IP when its LAN IP is not routable.
 			current := map[string]upgrade.Version{}
 			workingIP := map[string]string{}
+			drift := map[string]bool{}
 			var skipped []string
 			for _, ref := range ordered {
 				n := byName[ref.Name]
@@ -134,6 +135,16 @@ func newUpgradeCmd() *cobra.Command {
 				}
 				workingIP[ref.Name] = ep
 				current[ref.Name] = v
+				// Schematic drift: same version, different image (e.g. new
+				// extraKernelArgs). Unknown ("" or error) is not drift.
+				if want := n.EffectiveSchematic(cfg.Cluster); want != "" {
+					if got, err := upgrade.DetectSchematic("", p.Talosconfig(), ep); err == nil && got != "" && got != want {
+						drift[ref.Name] = true
+						if outputMode != "json" {
+							fmt.Fprintf(cmd.ErrOrStderr(), "note: %s runs schematic %.12s, config wants %.12s\n", ref.Name, got, want)
+						}
+					}
+				}
 			}
 			if len(current) == 0 {
 				return errs.Network("E_DETECT",
@@ -167,6 +178,7 @@ func newUpgradeCmd() *cobra.Command {
 				return errs.Validation("E_PATH", err.Error()).
 					WithHint("the release catalog is missing a required intermediate minor")
 			}
+			upgrade.AddSchematicDrift(&plan, ordered, current, target, drift)
 			// Annotate each node with its resolved factory schematic so the TUI
 			// detail toggle can reveal it (hidden by default).
 			plan.Schematics = map[string]string{}
@@ -208,11 +220,12 @@ func newUpgradeCmd() *cobra.Command {
 			if dryRun {
 				if outputMode == "json" {
 					return outputJSON(map[string]any{
-						"status":  "preview",
-						"method":  "upgrade",
-						"target":  target.String(),
-						"steps":   plan.Steps,
-						"skipped": skipped,
+						"status":    "preview",
+						"method":    "upgrade",
+						"target":    target.String(),
+						"steps":     plan.Steps,
+						"skipped":   skipped,
+						"reinstall": plan.Reinstall,
 					})
 				}
 				for _, name := range skipped {
@@ -225,6 +238,9 @@ func newUpgradeCmd() *cobra.Command {
 						nn = append(nn, n.Name)
 					}
 					fmt.Fprintf(cmd.OutOrStdout(), "  step %s: %v\n", s.Version, nn)
+				}
+				if len(plan.Reinstall) > 0 {
+					fmt.Fprintf(cmd.OutOrStdout(), "  (same-version reinstall for schematic drift: %v)\n", plan.Reinstall)
 				}
 				return nil
 			}
@@ -281,6 +297,12 @@ func newUpgradeCmd() *cobra.Command {
 					if err := upgrade.WaitHealthy(talosctlBin, p.Talosconfig(), ref.IP, sv, 15*time.Minute, 15*time.Second, progress); err != nil {
 						return errs.Timeout("E_HEALTH", err.Error()).
 							WithHint("node did not return healthy at the step version in time")
+					}
+					if drift[ref.Name] {
+						if err := upgrade.WaitSchematic(talosctlBin, p.Talosconfig(), ref.IP, node.EffectiveSchematic(cfg.Cluster), 15*time.Minute, 15*time.Second, progress); err != nil {
+							return errs.Timeout("E_SCHEMATIC", err.Error()).
+								WithHint("node did not come back on the configured schematic")
+						}
 					}
 					// Node now runs the step version; subsequent hops use a
 					// client matching this new current version.

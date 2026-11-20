@@ -133,6 +133,9 @@ type Plan struct {
 	// Populated by callers that have config in hand; the TUI hides these
 	// behind a detail toggle and renders nothing when empty.
 	Schematics map[string]string `json:"schematics,omitempty"`
+	// Reinstall lists nodes already at the target version that are queued
+	// only because their running schematic differs from config.yaml.
+	Reinstall []string `json:"reinstall,omitempty"`
 }
 
 // BuildPlan is the pure planner shared by the command and the TUI. Given the
@@ -179,6 +182,46 @@ func BuildPlan(cluster string, ordered []NodeRef, current map[string]Version, ta
 		}
 	}
 	return plan, nil
+}
+
+// AddSchematicDrift queues a same-version reinstall for every node in drift
+// (running schematic != configured schematic) that the version sweep would
+// otherwise skip because it is already at target. Such nodes join the step
+// for target (created if absent), preserving workers-first ordering. Nodes
+// already in a step get the configured schematic anyway, since every hop
+// installs node.EffectiveSchematic.
+func AddSchematicDrift(plan *Plan, ordered []NodeRef, current map[string]Version, target Version, drift map[string]bool) {
+	inSteps := map[string]bool{}
+	for _, s := range plan.Steps {
+		for _, n := range s.Nodes {
+			inSteps[n.Name] = true
+		}
+	}
+	var add []NodeRef
+	for _, ref := range ordered {
+		if drift[ref.Name] && !inSteps[ref.Name] && current[ref.Name] == target {
+			add = append(add, ref)
+			plan.Reinstall = append(plan.Reinstall, ref.Name)
+		}
+	}
+	if len(add) == 0 {
+		return
+	}
+	if n := len(plan.Steps); n > 0 && plan.Steps[n-1].Version == target.String() {
+		merged := map[string]bool{}
+		for _, r := range append(plan.Steps[n-1].Nodes, add...) {
+			merged[r.Name] = true
+		}
+		var nodes []NodeRef
+		for _, ref := range ordered {
+			if merged[ref.Name] {
+				nodes = append(nodes, ref)
+			}
+		}
+		plan.Steps[n-1].Nodes = nodes
+		return
+	}
+	plan.Steps = append(plan.Steps, Step{Version: target.String(), Nodes: add})
 }
 
 // OrderNodes returns nodes ordered workers-first, controlplane-last, with a
